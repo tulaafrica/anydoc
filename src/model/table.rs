@@ -16,6 +16,10 @@ pub struct Table {
     pub header_rows: usize,
     /// Whether the source used this table for data or for layout.
     pub kind: TableKind,
+    /// TULA FORK: authored column widths in the source's own unit (twips for
+    /// WordprocessingML), when the source declares a grid. Markdown ignores
+    /// them; a native renderer laying out the grid needs them.
+    pub column_widths: Option<Vec<u32>>,
 }
 
 /// What a table is for.
@@ -265,7 +269,7 @@ impl GridBuilder {
                 }
             }
         }
-        Table { grid: self.grid, header_rows: 0, kind }
+        Table { grid: self.grid, header_rows: 0, kind, column_widths: None }
     }
 }
 

@@ -216,11 +216,13 @@ fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), Con
 
     // Toggle properties: the paragraph style chain's true-parity flips the
     // docDefaults base. Headings use the same resolution as body text.
-    let parity = match pstyle_id {
-        Some(id) => ctx.styles.run_toggles(id)?,
+    // TULA FORK: presentation from the same chain layers over the base by
+    // plain inheritance - nearest specification wins, not parity.
+    let (parity, pres) = match pstyle_id {
+        Some(id) => (ctx.styles.run_toggles(id)?, ctx.styles.run_pres(id)?),
         None => Default::default(),
     };
-    let paragraph_level = parity.apply_over(ctx.styles.doc_defaults);
+    let paragraph_level = pres.apply(parity.apply_over(ctx.styles.doc_defaults));
 
     let kind = match heading {
         Some(level) => {
@@ -410,12 +412,16 @@ impl<'a, 'b, 'e> InlineWalker<'a, 'b, 'e> {
             Some(rpr) => {
                 // Character-style chain: another toggle layer over the
                 // paragraph-level value. Direct formatting is absolute.
-                let char_parity = match rpr.find(ns::W, "rStyle").and_then(|e| e.attr(ns::W, "val"))
+                // TULA FORK: the same chain's presentation layers by plain
+                // inheritance before direct formatting has the last word.
+                let (char_parity, char_pres) = match rpr
+                    .find(ns::W, "rStyle")
+                    .and_then(|e| e.attr(ns::W, "val"))
                 {
-                    Some(id) => self.ctx.styles.run_toggles(id)?,
+                    Some(id) => (self.ctx.styles.run_toggles(id)?, self.ctx.styles.run_pres(id)?),
                     None => Default::default(),
                 };
-                let with_char = char_parity.apply_over(self.base);
+                let with_char = char_pres.apply(char_parity.apply_over(self.base));
                 rpr_delta(rpr).apply(with_char)
             }
             None => self.base,
@@ -772,6 +778,23 @@ pub(super) fn parse_table(tbl: &Element, ctx: &Ctx) -> Result<Vec<Block>, Conver
         return Ok(Vec::new());
     }
     table.header_rows = resolve_header_rows(&table, header_rows);
+
+    // TULA FORK: w:tblGrid holds the AUTHORED column widths in twips. The
+    // Markdown serializer has no use for them (HTML tables size themselves),
+    // but a native renderer laying the grid out by hand has no other source
+    // of truth. Absent or unparsable widths leave the field None.
+    let widths: Vec<u32> = tbl
+        .find(ns::W, "tblGrid")
+        .map(|grid| {
+            grid.find_all(ns::W, "gridCol")
+                .filter_map(|col| col.attr(ns::W, "w").and_then(|w| w.parse().ok()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !widths.is_empty() {
+        table.column_widths = Some(widths);
+    }
+
     Ok(vec![Block::Table(table)])
 }
 

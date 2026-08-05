@@ -31,7 +31,11 @@ pub(crate) fn normalize<'a>(inlines: &'a [Inline], rc: &Ctx) -> Vec<Norm<'a>> {
                 if text.is_empty() {
                     continue;
                 }
-                let style = if text.trim().is_empty() { Style::PLAIN } else { *style };
+                // TULA FORK: Markdown sees only the emphasis projection, so
+                // runs differing solely in presentation (size, colour, ...)
+                // still merge into one span and upstream output is unchanged.
+                let style =
+                    if text.trim().is_empty() { Style::PLAIN } else { style.emphasis_only() };
                 if let Some(Norm::Text { text: prev, style: prev_style }) = out.last_mut()
                     && *prev_style == style
                 {

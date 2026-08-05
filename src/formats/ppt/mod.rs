@@ -552,6 +552,7 @@ impl Extractor {
                 italic: char_run.and_then(|r| r.italic).or(d.italic).unwrap_or(false),
                 strike: false,
                 code: false,
+                ..Style::PLAIN
             };
             if c == '\r' {
                 if !run_text.is_empty() {

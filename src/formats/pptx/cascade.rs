@@ -137,6 +137,8 @@ pub fn rpr_delta(rpr: &Element) -> StyleDelta {
         italic: on_off("i"),
         strike: rpr.attr(ns::A, "strike").map(|v| matches!(v, "sngStrike" | "dblStrike")),
         code: None,
+        // Presentation not yet read for pptx (Tula fork reads it for docx only).
+        ..StyleDelta::default()
     }
 }
 

@@ -20,8 +20,8 @@ fn table_from(rows: Vec<Vec<Cell>>, header_rows: usize) -> Block {
     Block::Table(Table::from_rows(rows, header_rows, TableKind::Data))
 }
 
-const BOLD: Style = Style { bold: true, italic: false, strike: false, code: false };
-const ITALIC: Style = Style { bold: false, italic: true, strike: false, code: false };
+const BOLD: Style = Style { bold: true, ..Style::PLAIN };
+const ITALIC: Style = Style { italic: true, ..Style::PLAIN };
 
 #[test]
 fn heading_and_paragraph() {
@@ -109,7 +109,7 @@ fn adjacent_same_style_runs_merged() {
 fn bold_italic_combo() {
     let md = doc(vec![Block::Paragraph(vec![styled(
         "both",
-        Style { bold: true, italic: true, strike: false, code: false },
+        Style { bold: true, italic: true, ..Style::PLAIN },
     )])]);
     assert_eq!(md, "***both***\n");
 }

@@ -34,7 +34,8 @@ impl Toggles {
             bold: base.bold ^ self.bold,
             italic: base.italic ^ self.italic,
             strike: base.strike ^ self.strike,
-            code: base.code,
+            // Toggles flip nothing else; presentation rides through intact.
+            ..base
         }
     }
 }
@@ -86,6 +87,21 @@ impl<'a> Styles<'a> {
             None
         })?;
         Ok(parity)
+    }
+
+    /// TULA FORK: presentation along a style's `basedOn` chain. Plain
+    /// last-writer-wins inheritance: the walk visits child-to-root, and for
+    /// each property the first (nearest) specification is kept.
+    pub fn run_pres(&self, id: &str) -> Result<StyleDelta, ConvertError> {
+        let mut acc = StyleDelta::default();
+        self.chains.walk::<()>(id, |style| {
+            if let Some(rpr) = style.find(ns::W, "rPr") {
+                // `acc` is nearer the child than `rpr` here, so acc wins.
+                acc = rpr_pres(rpr).merge(acc);
+            }
+            None
+        })?;
+        Ok(acc)
     }
 
     /// Heading level a paragraph style resolves to, from its name
@@ -174,6 +190,39 @@ pub fn rpr_delta(rpr: &Element) -> StyleDelta {
             None
         },
         code: None,
+        ..rpr_pres(rpr)
+    }
+}
+
+/// TULA FORK: the presentation half of a `w:rPr`, as a delta. Unlike the
+/// toggles these are plain properties - in the style chain the nearest
+/// specification wins - so the same delta serves direct formatting and
+/// chain layers alike.
+pub fn rpr_pres(rpr: &Element) -> StyleDelta {
+    let attr = |name: &str| rpr.find(ns::W, name).and_then(|e| e.attr(ns::W, "val"));
+    StyleDelta {
+        // w:u is NOT a toggle: any pattern value underlines, `none` is the
+        // explicit off. A bare <w:u/> has no defined pattern; treat as unset.
+        underline: attr("u").map(|v| v != "none"),
+        size_half_points: attr("sz").and_then(|v| v.parse().ok()),
+        // `auto` is an explicit reset - "the reader's default colour" - and
+        // must override an inherited colour, hence Some(None).
+        color: attr("color")
+            .map(|v| if v == "auto" { None } else { crate::model::parse_hex_color(v) }),
+        highlight: attr("highlight")
+            .map(|v| if v == "none" { None } else { crate::model::Highlight::parse(v) }),
+        vert_align: attr("vertAlign").map(|v| match v {
+            "superscript" => Some(crate::model::VertAlign::Superscript),
+            "subscript" => Some(crate::model::VertAlign::Subscript),
+            _ => None, // "baseline": explicit reset
+        }),
+        caps: match (on_off(rpr, "caps"), on_off(rpr, "smallCaps")) {
+            (Some(true), _) => Some(Some(crate::model::Caps::All)),
+            (_, Some(true)) => Some(Some(crate::model::Caps::Small)),
+            (Some(false), _) | (_, Some(false)) => Some(None),
+            (None, None) => None,
+        },
+        ..StyleDelta::default()
     }
 }
 
