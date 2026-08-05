@@ -7,10 +7,11 @@
 //! formatting is absolute on/off.
 
 use crate::error::ConvertError;
-use crate::model::Style;
+use crate::model::{FontId, Style};
 use crate::package::xml::{Element, ns};
 use crate::shared::chain::StyleChains;
 use crate::shared::delta::StyleDelta;
+use std::cell::RefCell;
 
 /// Per-property parity of `true` toggle specifications in a style chain.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -40,6 +41,38 @@ impl Toggles {
     }
 }
 
+/// TULA FORK: interns font-family names so `Style` can carry a `Copy` id
+/// instead of a string. Interior mutability because interning happens inside
+/// chain walks that only hold `&self`.
+#[derive(Default)]
+pub struct FontTable {
+    names: RefCell<Vec<String>>,
+}
+
+impl FontTable {
+    pub fn intern(&self, name: &str) -> Option<FontId> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let mut names = self.names.borrow_mut();
+        if let Some(index) = names.iter().position(|n| n == name) {
+            return Some(FontId(index as u16));
+        }
+        // u16 bounds the table at 65k distinct family names; a document
+        // naming more than that is not a document, it is an attack.
+        if names.len() >= u16::MAX as usize {
+            return None;
+        }
+        names.push(name.to_string());
+        Some(FontId((names.len() - 1) as u16))
+    }
+
+    pub fn into_names(self) -> Vec<String> {
+        self.names.into_inner()
+    }
+}
+
 pub struct Styles<'a> {
     chains: StyleChains<'a, Element>,
     /// docDefaults as absolute values (the base the toggles flip over).
@@ -47,14 +80,14 @@ pub struct Styles<'a> {
 }
 
 impl<'a> Styles<'a> {
-    pub fn parse_opt(root: Option<&'a Element>) -> Styles<'a> {
+    pub fn parse_opt(root: Option<&'a Element>, fonts: &FontTable) -> Styles<'a> {
         match root {
-            Some(root) => Styles::parse(root),
+            Some(root) => Styles::parse(root, fonts),
             None => Styles { chains: StyleChains::default(), doc_defaults: Style::PLAIN },
         }
     }
 
-    pub fn parse(root: &'a Element) -> Styles<'a> {
+    pub fn parse(root: &'a Element, fonts: &FontTable) -> Styles<'a> {
         let mut chains = StyleChains::default();
         for style in root.find_all(ns::W, "style") {
             if let Some(id) = style.attr(ns::W, "styleId") {
@@ -66,7 +99,7 @@ impl<'a> Styles<'a> {
             .find(ns::W, "docDefaults")
             .and_then(|d| d.find(ns::W, "rPrDefault"))
             .and_then(|d| d.find(ns::W, "rPr"))
-            .map(|rpr| rpr_delta(rpr).resolve())
+            .map(|rpr| rpr_delta(rpr, fonts).resolve())
             .unwrap_or(Style::PLAIN);
         Styles { chains, doc_defaults }
     }
@@ -92,12 +125,12 @@ impl<'a> Styles<'a> {
     /// TULA FORK: presentation along a style's `basedOn` chain. Plain
     /// last-writer-wins inheritance: the walk visits child-to-root, and for
     /// each property the first (nearest) specification is kept.
-    pub fn run_pres(&self, id: &str) -> Result<StyleDelta, ConvertError> {
+    pub fn run_pres(&self, id: &str, fonts: &FontTable) -> Result<StyleDelta, ConvertError> {
         let mut acc = StyleDelta::default();
         self.chains.walk::<()>(id, |style| {
             if let Some(rpr) = style.find(ns::W, "rPr") {
                 // `acc` is nearer the child than `rpr` here, so acc wins.
-                acc = rpr_pres(rpr).merge(acc);
+                acc = rpr_pres(rpr, fonts).merge(acc);
             }
             None
         })?;
@@ -179,7 +212,7 @@ impl<'a> Styles<'a> {
 
 /// A `w:rPr` element as a tri-state delta - used only for *direct* run
 /// formatting, where specifications are absolute on/off.
-pub fn rpr_delta(rpr: &Element) -> StyleDelta {
+pub fn rpr_delta(rpr: &Element, fonts: &FontTable) -> StyleDelta {
     let (s, d) = (on_off(rpr, "strike"), on_off(rpr, "dstrike"));
     StyleDelta {
         bold: on_off(rpr, "b"),
@@ -190,7 +223,7 @@ pub fn rpr_delta(rpr: &Element) -> StyleDelta {
             None
         },
         code: None,
-        ..rpr_pres(rpr)
+        ..rpr_pres(rpr, fonts)
     }
 }
 
@@ -198,9 +231,17 @@ pub fn rpr_delta(rpr: &Element) -> StyleDelta {
 /// toggles these are plain properties - in the style chain the nearest
 /// specification wins - so the same delta serves direct formatting and
 /// chain layers alike.
-pub fn rpr_pres(rpr: &Element) -> StyleDelta {
+pub fn rpr_pres(rpr: &Element, fonts: &FontTable) -> StyleDelta {
     let attr = |name: &str| rpr.find(ns::W, name).and_then(|e| e.attr(ns::W, "val"));
     StyleDelta {
+        // w:ascii names the Latin-script face; hAnsi is the common fallback a
+        // producer writes when ascii is absent. Theme fonts (w:asciiTheme,
+        // resolved through theme1.xml) are a documented follow-up.
+        font: rpr.find(ns::W, "rFonts").and_then(|f| {
+            f.attr(ns::W, "ascii")
+                .or_else(|| f.attr(ns::W, "hAnsi"))
+                .and_then(|name| fonts.intern(name))
+        }),
         // w:u is NOT a toggle: any pattern value underlines, `none` is the
         // explicit off. A bare <w:u/> has no defined pattern; treat as unset.
         underline: attr("u").map(|v| v != "none"),
@@ -278,7 +319,7 @@ mod tests {
             <w:style w:type="character" w:styleId="Flip"><w:basedOn w:val="NotBold"/><w:rPr><w:b/></w:rPr></w:style>
         </w:styles>"#;
         let root = parse(styles_xml);
-        let styles = Styles::parse(root.find(ns::W, "styles").unwrap());
+        let styles = Styles::parse(root.find(ns::W, "styles").unwrap(), &FontTable::default());
         assert_eq!(styles.run_toggles("NotBold").unwrap(), Toggles::default());
         assert!(styles.run_toggles("Flip").unwrap().bold);
     }

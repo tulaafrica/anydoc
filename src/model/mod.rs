@@ -18,7 +18,7 @@ pub use block::Block;
 pub use inline::{Inline, inlines_are_empty, inlines_to_plain_text};
 pub use link::{AnchorId, ImageSource, LinkTarget};
 pub use list::{List, ListItem, MarkerKind};
-pub use style::{Caps, Highlight, Style, VertAlign, parse_hex_color};
+pub use style::{Caps, FontId, Highlight, Style, VertAlign, parse_hex_color};
 pub use table::{Cell, CellSlot, Table, TableKind};
 
 /// Frontends build grids; consumers read them off [`Table::grid`].
@@ -35,6 +35,9 @@ pub struct Document {
     pub notes: Vec<Note>,
     /// Every embedded asset, indexed by [`AssetId`].
     pub assets: Vec<Asset>,
+    /// Font-family names referenced by [`Style::font`], indexed by
+    /// [`FontId`]. Empty for frontends that do not read fonts.
+    pub fonts: Vec<String>,
 }
 
 /// Footnote or endnote body, referenced from text by [`Inline::NoteRef`].

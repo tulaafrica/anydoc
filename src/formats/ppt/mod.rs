@@ -48,7 +48,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
         return Err(ConvertError::Encrypted);
     }
     let assets = collect_pictures(&mut ole)?;
-    Ok(Document { blocks: ex.into_blocks(), notes: Vec::new(), assets })
+    Ok(Document { blocks: ex.into_blocks(), notes: Vec::new(), assets, fonts: Vec::new() })
 }
 
 /// Retain the deck's embedded pictures from the `Pictures` stream (OfficeArt

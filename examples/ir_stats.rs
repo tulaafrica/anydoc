@@ -15,6 +15,7 @@ struct Counts {
     highlight: usize,
     vert: usize,
     caps: usize,
+    font: usize,
     tables: usize,
     with_widths: usize,
 }
@@ -51,6 +52,9 @@ fn walk_inlines(inlines: &[Inline], c: &mut Counts) {
                 }
                 if style.caps.is_some() {
                     c.caps += 1
+                }
+                if style.font.is_some() {
+                    c.font += 1
                 }
             }
             Inline::Link { content, .. } => walk_inlines(content, c),
@@ -100,7 +104,7 @@ fn main() {
         let name = path.rsplit('/').next().unwrap_or(&path);
         println!("{name}");
         println!(
-            "  runs {} chars {} | bold {} italic {} underline {} strike {} | size {} color {} highlight {} vert {} caps {} | tables {} with_widths {}",
+            "  runs {} chars {} | bold {} italic {} underline {} strike {} | size {} color {} font {} highlight {} vert {} caps {} | tables {} with_widths {} | fonts: {:?}",
             c.runs,
             c.chars,
             c.bold,
@@ -109,11 +113,13 @@ fn main() {
             c.strike,
             c.size,
             c.color,
+            c.font,
             c.highlight,
             c.vert,
             c.caps,
             c.tables,
-            c.with_widths
+            c.with_widths,
+            doc.fonts
         );
     }
 }

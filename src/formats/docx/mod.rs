@@ -38,8 +38,12 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
 
     let styles_part = typed_part_path(&doc_rels, &main_part, rel_type::STYLES, "styles.xml");
     let styles_tree = pkg.borrow_mut().optional_xml_part(&styles_part)?;
-    let styles =
-        styles::Styles::parse_opt(styles_tree.as_ref().and_then(|t| t.find(ns::W, "styles")));
+    // TULA FORK: font names interned once per document, shared by every part.
+    let fonts = styles::FontTable::default();
+    let styles = styles::Styles::parse_opt(
+        styles_tree.as_ref().and_then(|t| t.find(ns::W, "styles")),
+        &fonts,
+    );
 
     let numbering_part =
         typed_part_path(&doc_rels, &main_part, rel_type::NUMBERING, "numbering.xml");
@@ -70,6 +74,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
         numbering: &numbering,
         counters: &counters,
         assets: &assets,
+        fonts: &fonts,
     };
     let blocks = content::parse_blocks(body, &ctx)?;
 
@@ -103,7 +108,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     }
 
     let assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(Document { blocks, notes, assets })
+    Ok(Document { blocks, notes, assets, fonts: fonts.into_names() })
 }
 
 /// Path of a typed related part, resolved against the main part; falls back

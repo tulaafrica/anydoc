@@ -2,7 +2,7 @@
 
 use crate::error::ConvertError;
 use crate::formats::docx::numbering::{Counters, Numbering};
-use crate::formats::docx::styles::{Styles, on_off, rpr_delta};
+use crate::formats::docx::styles::{FontTable, Styles, on_off, rpr_delta};
 use crate::model::{
     Block, Cell, GridBuilder, ImageSource, Inline, LinkTarget, Style, TableKind, inlines_are_empty,
 };
@@ -43,6 +43,7 @@ pub(super) struct Ctx<'a, 'b> {
     pub numbering: &'b Numbering,
     pub counters: &'b RefCell<Counters>,
     pub assets: &'b RefCell<AssetSink>,
+    pub fonts: &'b FontTable,
 }
 
 impl<'a, 'b> Ctx<'a, 'b> {
@@ -57,6 +58,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
             numbering: self.numbering,
             counters: self.counters,
             assets: self.assets,
+            fonts: self.fonts,
         }
     }
 
@@ -219,7 +221,7 @@ fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), Con
     // TULA FORK: presentation from the same chain layers over the base by
     // plain inheritance - nearest specification wins, not parity.
     let (parity, pres) = match pstyle_id {
-        Some(id) => (ctx.styles.run_toggles(id)?, ctx.styles.run_pres(id)?),
+        Some(id) => (ctx.styles.run_toggles(id)?, ctx.styles.run_pres(id, ctx.fonts)?),
         None => Default::default(),
     };
     let paragraph_level = pres.apply(parity.apply_over(ctx.styles.doc_defaults));
@@ -414,15 +416,16 @@ impl<'a, 'b, 'e> InlineWalker<'a, 'b, 'e> {
                 // paragraph-level value. Direct formatting is absolute.
                 // TULA FORK: the same chain's presentation layers by plain
                 // inheritance before direct formatting has the last word.
-                let (char_parity, char_pres) = match rpr
-                    .find(ns::W, "rStyle")
-                    .and_then(|e| e.attr(ns::W, "val"))
-                {
-                    Some(id) => (self.ctx.styles.run_toggles(id)?, self.ctx.styles.run_pres(id)?),
-                    None => Default::default(),
-                };
+                let (char_parity, char_pres) =
+                    match rpr.find(ns::W, "rStyle").and_then(|e| e.attr(ns::W, "val")) {
+                        Some(id) => (
+                            self.ctx.styles.run_toggles(id)?,
+                            self.ctx.styles.run_pres(id, self.ctx.fonts)?,
+                        ),
+                        None => Default::default(),
+                    };
                 let with_char = char_pres.apply(char_parity.apply_over(self.base));
-                rpr_delta(rpr).apply(with_char)
+                rpr_delta(rpr, self.ctx.fonts).apply(with_char)
             }
             None => self.base,
         };

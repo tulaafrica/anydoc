@@ -7,7 +7,7 @@
 //! (ECMA-376 §17.7.3) - presentation properties inherit last-writer-wins:
 //! the nearest explicit specification along the chain is the value.
 
-use crate::model::{Caps, Highlight, Inline, Style, VertAlign};
+use crate::model::{Caps, FontId, Highlight, Inline, Style, VertAlign};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StyleDelta {
@@ -28,6 +28,8 @@ pub struct StyleDelta {
     pub vert_align: Option<Option<VertAlign>>,
     /// `Some(None)` is an explicit caps-off (`w:caps w:val="0"`).
     pub caps: Option<Option<Caps>>,
+    /// Interned font family. No reset form: `w:rFonts` only ever names fonts.
+    pub font: Option<FontId>,
 }
 
 impl StyleDelta {
@@ -45,6 +47,7 @@ impl StyleDelta {
             highlight: child.highlight.or(self.highlight),
             vert_align: child.vert_align.or(self.vert_align),
             caps: child.caps.or(self.caps),
+            font: child.font.or(self.font),
         }
     }
 
@@ -60,6 +63,7 @@ impl StyleDelta {
             highlight: self.highlight.unwrap_or(base.highlight),
             vert_align: self.vert_align.unwrap_or(base.vert_align),
             caps: self.caps.unwrap_or(base.caps),
+            font: self.font.or(base.font),
         }
     }
 

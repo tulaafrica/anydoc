@@ -5,7 +5,12 @@ use crate::model::{
 };
 
 fn doc(blocks: Vec<Block>) -> String {
-    document_to_markdown(&Document { blocks, notes: Vec::new(), assets: Vec::new() })
+    document_to_markdown(&Document {
+        blocks,
+        notes: Vec::new(),
+        assets: Vec::new(),
+        fonts: Vec::new(),
+    })
 }
 
 fn styled(text: &str, style: Style) -> Inline {
@@ -393,6 +398,7 @@ fn footnotes() {
             ),
         ],
         assets: Vec::new(),
+        fonts: Vec::new(),
     });
     assert_eq!(
         md,
@@ -412,6 +418,7 @@ fn empty_and_unreferenced_notes() {
             note("orphan", vec![Block::Paragraph(vec![Inline::plain("Kept.")])]),
         ],
         assets: Vec::new(),
+        fonts: Vec::new(),
     });
     assert_eq!(md, "Text\n\n[^1]: Kept.\n");
 }
@@ -425,6 +432,7 @@ fn duplicate_note_ids_render_one_definition() {
             note("a", vec![Block::Paragraph(vec![Inline::plain("Duplicate dropped.")])]),
         ],
         assets: Vec::new(),
+        fonts: Vec::new(),
     });
     assert_eq!(md, "Text[^1]\n\n[^1]: First wins.\n");
 }

@@ -1010,7 +1010,12 @@ impl<'a> Parser<'a> {
         self.table.collapse_nested()?;
         self.flush_top_table()?;
         self.flush_list();
-        Ok(Document { blocks: self.blocks, notes: self.dest.notes, assets: self.assets.assets })
+        Ok(Document {
+            blocks: self.blocks,
+            notes: self.dest.notes,
+            assets: self.assets.assets,
+            fonts: Vec::new(),
+        })
     }
 }
 

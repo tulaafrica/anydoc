@@ -94,8 +94,10 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     let mut failed = 0usize;
     let instance_counter = StdCell::new(0u64);
     // Every slide has a start anchor id so internal slide-to-slide links
-    // resolve after concatenation; the anchor node is emitted only on
-    // slides some link actually targets.
+    // resolve after concatenation. TULA FORK: the anchor node is emitted on
+    // EVERY slide (upstream: only on slides some link targets), so a
+    // document-model consumer can split the deck at slide boundaries;
+    // Markdown drops untargeted anchors, so its output is unchanged.
     let slide_anchors: HashMap<String, String> = slide_paths
         .iter()
         .enumerate()
@@ -105,16 +107,6 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     for p in &slide_paths {
         all_rels.push(read_rels(&mut pkg.borrow_mut(), &rels_part_for(p))?);
     }
-    let targeted: std::collections::HashSet<String> = slide_paths
-        .iter()
-        .zip(&all_rels)
-        .flat_map(|(p, rels)| {
-            rels.iter()
-                .filter(|(_, r)| r.rel_type == SLIDE_REL && r.mode == TargetMode::Internal)
-                .filter_map(move |(_, r)| path::resolve(p, &r.target).ok().map(|t| t.path))
-        })
-        .filter(|t| slide_anchors.contains_key(t))
-        .collect();
 
     for (slide_index, slide_path) in slide_paths.iter().enumerate() {
         let tree = match pkg.borrow_mut().optional_xml_part(slide_path)? {
@@ -163,9 +155,12 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
             instance_counter: &instance_counter,
             slide_anchors: &slide_anchors,
         };
-        if targeted.contains(slide_path)
-            && let Some(anchor) = slide_anchors.get(slide_path)
-        {
+        // TULA FORK: every slide opens with its `slide-N` anchor, not only the
+        // ones an internal link targets. A native renderer needs the slide
+        // boundary (a 24-slide deck is unreadable as one undifferentiated
+        // block stream); Markdown output is unchanged, because normalize()
+        // drops anchors nothing links to.
+        if let Some(anchor) = slide_anchors.get(slide_path) {
             blocks.push(Block::Paragraph(vec![Inline::Anchor(anchor.clone())]));
         }
         parse_shapes(sp_tree, &ctx, &mut blocks)?;
@@ -212,7 +207,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     }
 
     let assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(Document { blocks, notes: Vec::new(), assets })
+    Ok(Document { blocks, notes: Vec::new(), assets, fonts: Vec::new() })
 }
 
 fn rel_target_of_type(rels: &Relationships, base: &str, rel_type: &str) -> Option<String> {

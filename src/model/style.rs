@@ -33,7 +33,16 @@ pub struct Style {
     pub vert_align: Option<VertAlign>,
     /// All-caps or small-caps rendering.
     pub caps: Option<Caps>,
+    /// Font family, as an index into [`Document::fonts`](crate::model::Document::fonts).
+    /// Interned so `Style` stays `Copy`; the table carries the author's own
+    /// names ("Times New Roman"), mapping them to a shippable face is the
+    /// renderer's job.
+    pub font: Option<FontId>,
 }
+
+/// Index into [`Document::fonts`](crate::model::Document::fonts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontId(pub u16);
 
 impl Style {
     /// No toggle set.
@@ -48,6 +57,7 @@ impl Style {
         highlight: None,
         vert_align: None,
         caps: None,
+        font: None,
     };
 
     /// The Markdown-visible projection: toggles kept, presentation dropped.
