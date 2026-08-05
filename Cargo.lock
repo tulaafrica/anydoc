@@ -105,6 +105,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "anydoc-mobile"
+version = "0.1.0"
+dependencies = [
+ "anydoc",
+]
+
+[[package]]
 name = "anydoc-node"
 version = "0.1.0"
 dependencies = [

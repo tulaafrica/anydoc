@@ -1,0 +1,18 @@
+[package]
+name = "anydoc-mobile"
+version = "0.1.0"
+edition = "2024"
+description = "Tula's mobile FFI for anydoc: bytes in, DocumentIR JSON + asset blob out"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+anydoc = { path = ".." }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
