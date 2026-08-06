@@ -77,6 +77,9 @@ pub(crate) fn normalize<'a>(inlines: &'a [Inline], rc: &Ctx) -> Vec<Norm<'a>> {
             Inline::Anchor(id) => out.push(Norm::Anchor(id)),
             Inline::NoteRef(id) => out.push(Norm::NoteRef(id)),
             Inline::LineBreak => out.push(Norm::LineBreak),
+            // TULA FORK: zero-width paragraph presentation - nothing for
+            // Markdown to draw, and it must not part mergeable runs.
+            Inline::ParaPres(_) => continue,
         }
     }
     out

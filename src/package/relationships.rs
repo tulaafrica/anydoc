@@ -14,6 +14,9 @@ pub mod rel_type {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
     pub const STYLES: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+    /// TULA FORK: the document theme, source of `w:asciiTheme` font names.
+    pub const THEME: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
     pub const NUMBERING: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
     pub const FOOTNOTES: &str =

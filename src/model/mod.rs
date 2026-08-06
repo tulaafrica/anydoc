@@ -18,8 +18,8 @@ pub use block::Block;
 pub use inline::{Inline, inlines_are_empty, inlines_to_plain_text};
 pub use link::{AnchorId, ImageSource, LinkTarget};
 pub use list::{List, ListItem, MarkerKind};
-pub use style::{Caps, FontId, Highlight, Style, VertAlign, parse_hex_color};
-pub use table::{Cell, CellSlot, Table, TableKind};
+pub use style::{Align, Caps, FontId, Highlight, ParaProps, Style, VertAlign, parse_hex_color};
+pub use table::{BorderEdge, Cell, CellSlot, Table, TableBorders, TableKind};
 
 /// Frontends build grids; consumers read them off [`Table::grid`].
 pub(crate) use table::GridBuilder;

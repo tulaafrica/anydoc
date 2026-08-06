@@ -229,7 +229,7 @@ fn keeps_paragraph(inlines: &[Inline]) -> bool {
 fn at_space_boundary(inlines: &[Inline], start: bool) -> bool {
     for inline in inlines.iter().rev() {
         match inline {
-            Inline::Anchor(_) => continue,
+            Inline::Anchor(_) | Inline::ParaPres(_) => continue,
             Inline::Text { text, .. } => {
                 if text.is_empty() {
                     continue;

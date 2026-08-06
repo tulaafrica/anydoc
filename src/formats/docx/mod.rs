@@ -39,7 +39,22 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     let styles_part = typed_part_path(&doc_rels, &main_part, rel_type::STYLES, "styles.xml");
     let styles_tree = pkg.borrow_mut().optional_xml_part(&styles_part)?;
     // TULA FORK: font names interned once per document, shared by every part.
+    // The theme loads FIRST: docDefaults commonly names its face only through
+    // w:asciiTheme, so resolution must already know the theme's fonts.
     let fonts = styles::FontTable::default();
+    let theme_part = typed_part_path(&doc_rels, &main_part, rel_type::THEME, "theme/theme1.xml");
+    if let Some(theme) = pkg.borrow_mut().optional_xml_part(&theme_part)? {
+        let latin = |group: &str| {
+            theme
+                .first_descendant(ns::A, group)
+                .and_then(|g| g.find(ns::A, "latin"))
+                .and_then(|l| l.attr_unqualified("typeface"))
+                .map(str::to_string)
+        };
+        let minor = latin("minorFont");
+        let major = latin("majorFont");
+        fonts.set_theme(minor.as_deref(), major.as_deref());
+    }
     let styles = styles::Styles::parse_opt(
         styles_tree.as_ref().and_then(|t| t.find(ns::W, "styles")),
         &fonts,

@@ -5,7 +5,7 @@
 //! knowing which produced it. Emitted as one JSON string by a hand-rolled
 //! writer - serde would cost ~300kB of binary for a fixed, known shape.
 
-use anydoc::model::{Block, CellSlot, Document, Inline, Style};
+use anydoc::model::{Align, Block, CellSlot, Document, Inline, ParaProps, Style};
 
 /// A resolved asset the caller must carry alongside the IR.
 pub struct IrAsset<'a> {
@@ -259,8 +259,9 @@ impl<'a> Emitter<'a> {
                         );
                     }
                     // Zero-width in the source; nothing to draw. Slide anchors
-                    // are handled a level up as page breaks.
-                    Inline::Anchor(_) | Inline::NoteRef(_) => {}
+                    // are handled a level up as page breaks; ParaPres is
+                    // lifted onto the block by write_block.
+                    Inline::Anchor(_) | Inline::NoteRef(_) | Inline::ParaPres(_) => {}
                 }
             }
         }
@@ -288,21 +289,34 @@ impl<'a> Emitter<'a> {
     fn write_block(&mut self, block: &Block, out: &mut String, first: &mut bool) {
         match block {
             Block::Heading { level, content, .. } => {
+                let props = para_props_of(content).copied();
                 let segments = self.segments(content);
                 for segment in segments {
-                    self.write_segment_block(segment, Some((*level).clamp(1, 6)), out, first);
+                    self.write_segment_block(
+                        segment,
+                        Some((*level).clamp(1, 6)),
+                        props,
+                        out,
+                        first,
+                    );
                 }
             }
             Block::Paragraph(inlines) => {
+                let props = para_props_of(inlines).copied();
                 let segments = self.segments(inlines);
                 if segments.is_empty() {
-                    // A genuinely empty paragraph is meaningful vertical space.
+                    // A genuinely empty paragraph is meaningful vertical space
+                    // - and its spacing (a spacer paragraph) still matters.
                     sep(out, first);
-                    out.push_str("{\"type\":\"paragraph\",\"runs\":[]}");
+                    out.push_str("{\"type\":\"paragraph\",\"runs\":[]");
+                    if let Some(p) = &props {
+                        write_layout(p, out);
+                    }
+                    out.push('}');
                     return;
                 }
                 for segment in segments {
-                    self.write_segment_block(segment, None, out, first);
+                    self.write_segment_block(segment, None, props, out, first);
                 }
             }
             Block::List(list) => {
@@ -347,6 +361,13 @@ impl<'a> Emitter<'a> {
                             write_runs(&runs, out);
                         }
                         out.push(']');
+                        if let Some(t) = cell.width_twips {
+                            out.push_str(&format!(",\"width\":{}", twips_to_px(t)));
+                        }
+                        if let Some([r, g, b]) = cell.background {
+                            out.push(',');
+                            str_field(out, "background", &format!("#{r:02X}{g:02X}{b:02X}"));
+                        }
                         if cell.col_span > 1 {
                             out.push_str(&format!(",\"colSpan\":{}", cell.col_span));
                         }
@@ -367,6 +388,36 @@ impl<'a> Emitter<'a> {
                         out.push_str(&twips_to_px(*w).to_string());
                     }
                     out.push(']');
+                }
+                if let Some(borders) = &table.borders {
+                    // rn-docx-ir's shape: px width (eighths of a point ->
+                    // px, min 1 so a hairline still draws), colour with
+                    // #000000 standing in for auto.
+                    let edge_px = |e: &anydoc::model::BorderEdge| {
+                        let px = ((e.width_eighths as f64) / 8.0 * 96.0 / 72.0).round().max(1.0);
+                        let color = e
+                            .color
+                            .map(|[r, g, b]| format!("#{r:02X}{g:02X}{b:02X}"))
+                            .unwrap_or_else(|| "#000000".to_string());
+                        format!("{{\"width\":{px},\"color\":\"{color}\"}}")
+                    };
+                    let mut group = String::new();
+                    for (key, e) in [
+                        ("top", borders.top),
+                        ("bottom", borders.bottom),
+                        ("left", borders.left),
+                        ("right", borders.right),
+                        ("insideH", borders.inside_h),
+                        ("insideV", borders.inside_v),
+                    ] {
+                        if let Some(e) = e {
+                            if !group.is_empty() {
+                                group.push(',');
+                            }
+                            group.push_str(&format!("\"{key}\":{}", edge_px(&e)));
+                        }
+                    }
+                    out.push_str(&format!(",\"borders\":{{{group}}}"));
                 }
                 out.push('}');
             }
@@ -398,6 +449,7 @@ impl<'a> Emitter<'a> {
         &mut self,
         segment: Segment,
         heading: Option<u8>,
+        props: Option<ParaProps>,
         out: &mut String,
         first: &mut bool,
     ) {
@@ -411,6 +463,9 @@ impl<'a> Emitter<'a> {
                     None => out.push_str("{\"type\":\"paragraph\",\"runs\":"),
                 }
                 write_runs(&runs, out);
+                if let Some(p) = &props {
+                    write_layout(p, out);
+                }
                 out.push('}');
             }
             Segment::Image(asset_ref) => {
@@ -453,6 +508,71 @@ impl<'a> Emitter<'a> {
             }
         }
     }
+}
+
+/// Paragraph layout as IR JSON fields, appended INSIDE an open block object.
+/// Mirrors rn-docx-ir's rules exactly: left alignment is the default and is
+/// omitted; twips convert to px; zeros are omitted; empty groups are omitted.
+fn write_layout(props: &ParaProps, out: &mut String) {
+    match props.align {
+        Some(Align::Center) => out.push_str(",\"align\":\"center\""),
+        Some(Align::Right) => out.push_str(",\"align\":\"right\""),
+        Some(Align::Justify) => out.push_str(",\"align\":\"justify\""),
+        Some(Align::Left) | None => {}
+    }
+
+    let px = |t: i32| -> i64 { ((t as f64) / 15.0).round() as i64 };
+    let mut group = String::new();
+    for (key, value) in [
+        ("start", props.indent_start),
+        ("end", props.indent_end),
+        ("firstLine", props.indent_first_line),
+        ("hanging", props.indent_hanging),
+    ] {
+        if let Some(t) = value
+            && px(t) != 0
+        {
+            if !group.is_empty() {
+                group.push(',');
+            }
+            group.push_str(&format!("\"{key}\":{}", px(t)));
+        }
+    }
+    if !group.is_empty() {
+        out.push_str(&format!(",\"indent\":{{{group}}}"));
+    }
+
+    group = String::new();
+    for (key, value) in [("before", props.spacing_before), ("after", props.spacing_after)] {
+        if let Some(t) = value
+            && px(t as i32) != 0
+        {
+            if !group.is_empty() {
+                group.push(',');
+            }
+            group.push_str(&format!("\"{key}\":{}", px(t as i32)));
+        }
+    }
+    if let Some(line) = props.line_240ths
+        && line > 0
+        && line != 240
+    {
+        if !group.is_empty() {
+            group.push(',');
+        }
+        group.push_str(&format!("\"lineHeightMultiple\":{}", (line as f64) / 240.0));
+    }
+    if !group.is_empty() {
+        out.push_str(&format!(",\"spacing\":{{{group}}}"));
+    }
+}
+
+/// The leading ParaPres marker of a paragraph's inline stream, if any.
+fn para_props_of(inlines: &[Inline]) -> Option<&ParaProps> {
+    inlines.iter().find_map(|i| match i {
+        Inline::ParaPres(p) => Some(p.as_ref()),
+        _ => None,
+    })
 }
 
 fn sep(out: &mut String, first: &mut bool) {

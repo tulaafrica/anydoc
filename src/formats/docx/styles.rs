@@ -47,6 +47,12 @@ impl Toggles {
 #[derive(Default)]
 pub struct FontTable {
     names: RefCell<Vec<String>>,
+    /// The theme's minor (body) and major (headings) Latin faces, interned.
+    /// `w:asciiTheme`/`w:hAnsiTheme` resolve through these - and docDefaults
+    /// very often carries ONLY a theme reference, so without them a document
+    /// styled entirely through the theme has no fonts at all.
+    theme_minor: RefCell<Option<FontId>>,
+    theme_major: RefCell<Option<FontId>>,
 }
 
 impl FontTable {
@@ -70,6 +76,25 @@ impl FontTable {
 
     pub fn into_names(self) -> Vec<String> {
         self.names.into_inner()
+    }
+
+    /// Record the theme's Latin faces (from a:fontScheme in the theme part).
+    pub fn set_theme(&self, minor: Option<&str>, major: Option<&str>) {
+        *self.theme_minor.borrow_mut() = minor.and_then(|n| self.intern(n));
+        *self.theme_major.borrow_mut() = major.and_then(|n| self.intern(n));
+    }
+
+    /// The face an ST_Theme value names. `minor*` is the body face,
+    /// `major*` the heading face; the ascii/hAnsi/eastAsia/bidi variants all
+    /// map onto the same Latin faces here.
+    pub fn theme_font(&self, theme_value: &str) -> Option<FontId> {
+        if theme_value.starts_with("minor") {
+            *self.theme_minor.borrow()
+        } else if theme_value.starts_with("major") {
+            *self.theme_major.borrow()
+        } else {
+            None
+        }
     }
 }
 
@@ -235,12 +260,18 @@ pub fn rpr_pres(rpr: &Element, fonts: &FontTable) -> StyleDelta {
     let attr = |name: &str| rpr.find(ns::W, name).and_then(|e| e.attr(ns::W, "val"));
     StyleDelta {
         // w:ascii names the Latin-script face; hAnsi is the common fallback a
-        // producer writes when ascii is absent. Theme fonts (w:asciiTheme,
-        // resolved through theme1.xml) are a documented follow-up.
+        // producer writes when ascii is absent; failing both, a theme
+        // reference (w:asciiTheme="minorHAnsi") resolves through the theme's
+        // fontScheme, which is how most Word defaults name Calibri.
         font: rpr.find(ns::W, "rFonts").and_then(|f| {
             f.attr(ns::W, "ascii")
                 .or_else(|| f.attr(ns::W, "hAnsi"))
                 .and_then(|name| fonts.intern(name))
+                .or_else(|| {
+                    f.attr(ns::W, "asciiTheme")
+                        .or_else(|| f.attr(ns::W, "hAnsiTheme"))
+                        .and_then(|value| fonts.theme_font(value))
+                })
         }),
         // w:u is NOT a toggle: any pattern value underlines, `none` is the
         // explicit off. A bare <w:u/> has no defined pattern; treat as unset.

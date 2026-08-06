@@ -177,6 +177,59 @@ pub enum Caps {
     Small,
 }
 
+/// TULA FORK: paragraph-level presentation, carried by [`Inline::ParaPres`]
+/// (crate::model::Inline::ParaPres). All values are in the source's own
+/// units - twips for indents and spacing, 240ths of a line for line height -
+/// and every field is optional: absent means "the reader's default".
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ParaProps {
+    /// `w:jc`.
+    pub align: Option<Align>,
+    /// `w:ind w:start`/`w:left`, twips.
+    pub indent_start: Option<i32>,
+    /// `w:ind w:end`/`w:right`, twips.
+    pub indent_end: Option<i32>,
+    /// `w:ind w:firstLine`, twips.
+    pub indent_first_line: Option<i32>,
+    /// `w:ind w:hanging`, twips.
+    pub indent_hanging: Option<i32>,
+    /// `w:spacing w:before`, twips.
+    pub spacing_before: Option<u32>,
+    /// `w:spacing w:after`, twips.
+    pub spacing_after: Option<u32>,
+    /// `w:spacing w:line` with `lineRule="auto"`: 240ths of a single line.
+    pub line_240ths: Option<u32>,
+}
+
+impl ParaProps {
+    /// Nothing specified - the marker would carry no information.
+    pub fn is_empty(&self) -> bool {
+        *self == ParaProps::default()
+    }
+}
+
+/// Paragraph alignment (`ST_Jc`, collapsed to what a renderer can draw).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+impl Align {
+    /// Parse an ST_Jc value. Word writes `both` for justified text.
+    pub fn parse(value: &str) -> Option<Align> {
+        Some(match value {
+            "left" | "start" => Align::Left,
+            "center" => Align::Center,
+            "right" | "end" => Align::Right,
+            "both" | "justify" | "distribute" => Align::Justify,
+            _ => return None,
+        })
+    }
+}
+
 /// Parse a WordprocessingML hex colour (`RRGGBB`). `auto` - "whatever the
 /// reader's default is" - resolves to `None`, never to black.
 pub fn parse_hex_color(value: &str) -> Option<[u8; 3]> {

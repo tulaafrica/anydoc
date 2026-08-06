@@ -20,6 +20,28 @@ pub struct Table {
     /// WordprocessingML), when the source declares a grid. Markdown ignores
     /// them; a native renderer laying out the grid needs them.
     pub column_widths: Option<Vec<u32>>,
+    /// TULA FORK: the table's authored borders (`w:tblBorders`), when any
+    /// edge is drawn. Markdown ignores them.
+    pub borders: Option<TableBorders>,
+}
+
+/// TULA FORK: per-edge table borders. An absent edge draws nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TableBorders {
+    pub top: Option<BorderEdge>,
+    pub bottom: Option<BorderEdge>,
+    pub left: Option<BorderEdge>,
+    pub right: Option<BorderEdge>,
+    pub inside_h: Option<BorderEdge>,
+    pub inside_v: Option<BorderEdge>,
+}
+
+/// One drawn border edge, in the source's units (w:sz: EIGHTHS of a point).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorderEdge {
+    pub width_eighths: u16,
+    /// Absent means "auto" - the reader's default ink.
+    pub color: Option<[u8; 3]>,
 }
 
 /// What a table is for.
@@ -51,6 +73,10 @@ pub enum CellSlot {
 /// A table cell and the extent it spans.
 #[derive(Debug, Clone, Default)]
 pub struct Cell {
+    /// TULA FORK: authored cell width (`w:tcW` dxa), twips.
+    pub width_twips: Option<u32>,
+    /// TULA FORK: cell shading fill (`w:shd w:fill`), when not `auto`.
+    pub background: Option<[u8; 3]>,
     /// The cell's content.
     pub blocks: Vec<Block>,
     /// Columns covered, at least 1.
@@ -62,7 +88,7 @@ pub struct Cell {
 impl Cell {
     /// A cell spanning one position.
     pub fn new(blocks: Vec<Block>) -> Self {
-        Cell { blocks, col_span: 1, row_span: 1 }
+        Cell { blocks, col_span: 1, row_span: 1, ..Default::default() }
     }
 
     /// A one-paragraph cell spanning one position.
@@ -73,7 +99,7 @@ impl Cell {
     /// A cell covering `col_span` by `row_span` positions; either span given
     /// as 0 is raised to 1.
     pub fn spanning(blocks: Vec<Block>, col_span: u32, row_span: u32) -> Self {
-        Cell { blocks, col_span: col_span.max(1), row_span: row_span.max(1) }
+        Cell { blocks, col_span: col_span.max(1), row_span: row_span.max(1), ..Default::default() }
     }
 
     /// True when the cell holds nothing that would render: only paragraphs
@@ -269,7 +295,7 @@ impl GridBuilder {
                 }
             }
         }
-        Table { grid: self.grid, header_rows: 0, kind, column_widths: None }
+        Table { grid: self.grid, header_rows: 0, kind, column_widths: None, borders: None }
     }
 }
 

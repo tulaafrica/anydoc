@@ -1,4 +1,4 @@
-use crate::model::{AnchorId, ImageSource, LinkTarget, Style};
+use crate::model::{AnchorId, ImageSource, LinkTarget, ParaProps, Style};
 
 /// One span of inline content.
 #[derive(Debug, Clone)]
@@ -32,6 +32,11 @@ pub enum Inline {
     NoteRef(String),
     /// A line break inside a block, not a new block.
     LineBreak,
+    /// TULA FORK: zero-width paragraph-presentation marker, emitted as the
+    /// FIRST inline of a paragraph's content (same precedent as `Anchor`).
+    /// Carries what `Block::Paragraph`'s tuple shape cannot: alignment,
+    /// indents, spacing. Markdown renders it as nothing.
+    ParaPres(Box<ParaProps>),
 }
 
 impl Inline {
@@ -56,7 +61,7 @@ fn collect_plain_text(inlines: &[Inline], out: &mut String) {
             Inline::Text { text, .. } => out.push_str(text),
             Inline::Link { content, .. } => collect_plain_text(content, out),
             Inline::Image { alt, .. } => out.push_str(alt),
-            Inline::Anchor(_) | Inline::NoteRef(_) => {}
+            Inline::Anchor(_) | Inline::NoteRef(_) | Inline::ParaPres(_) => {}
             Inline::LineBreak => out.push('\n'),
         }
     }
@@ -70,6 +75,6 @@ pub fn inlines_are_empty(inlines: &[Inline]) -> bool {
         Inline::Text { text, .. } => text.trim().is_empty(),
         Inline::Link { content, target } => target.is_empty() && inlines_are_empty(content),
         Inline::Image { .. } | Inline::NoteRef(_) => false,
-        Inline::Anchor(_) | Inline::LineBreak => true,
+        Inline::Anchor(_) | Inline::LineBreak | Inline::ParaPres(_) => true,
     })
 }

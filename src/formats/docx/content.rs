@@ -4,7 +4,8 @@ use crate::error::ConvertError;
 use crate::formats::docx::numbering::{Counters, Numbering};
 use crate::formats::docx::styles::{FontTable, Styles, on_off, rpr_delta};
 use crate::model::{
-    Block, Cell, GridBuilder, ImageSource, Inline, LinkTarget, Style, TableKind, inlines_are_empty,
+    Align, Block, Cell, GridBuilder, ImageSource, Inline, LinkTarget, ParaProps, Style, TableKind,
+    inlines_are_empty,
 };
 use crate::package::Package;
 use crate::package::relationships::{RelTarget, Relationships, TargetMode, rel_target_bytes};
@@ -195,6 +196,38 @@ fn emit_paragraph(
     }
 }
 
+/// TULA FORK: direct paragraph presentation (w:jc, w:ind, w:spacing) from a
+/// pPr. Style-chain paragraph properties are a documented follow-up; direct
+/// formatting is where the overwhelming majority of authored layout lives
+/// (a centred title is centred on the paragraph, not in a style).
+fn para_props(ppr: Option<&Element>) -> ParaProps {
+    let Some(ppr) = ppr else { return ParaProps::default() };
+    let mut props = ParaProps::default();
+    if let Some(jc) = ppr.find(ns::W, "jc").and_then(|e| e.attr(ns::W, "val")) {
+        props.align = Align::parse(jc);
+    }
+    if let Some(ind) = ppr.find(ns::W, "ind") {
+        let read = |names: &[&str]| {
+            names.iter().find_map(|n| ind.attr(ns::W, n)).and_then(|v| v.parse().ok())
+        };
+        props.indent_start = read(&["start", "left"]);
+        props.indent_end = read(&["end", "right"]);
+        props.indent_first_line = read(&["firstLine"]);
+        props.indent_hanging = read(&["hanging"]);
+    }
+    if let Some(spacing) = ppr.find(ns::W, "spacing") {
+        let read = |n: &str| spacing.attr(ns::W, n).and_then(|v| v.parse().ok());
+        props.spacing_before = read("before");
+        props.spacing_after = read("after");
+        // w:line is a straight multiple only under lineRule="auto"; exact and
+        // atLeast are absolute heights a flow renderer cannot honour.
+        if spacing.attr(ns::W, "lineRule").is_none_or(|r| r == "auto") {
+            props.line_240ths = read("line");
+        }
+    }
+    props
+}
+
 fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), ConvertError> {
     let ppr = p.find(ns::W, "pPr");
     let pstyle_id = ppr.and_then(|pr| pr.find(ns::W, "pStyle")).and_then(|e| e.attr(ns::W, "val"));
@@ -244,7 +277,26 @@ fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), Con
 
     let mut walker = InlineWalker::new(ctx, paragraph_level);
     walker.walk(p)?;
-    Ok((kind, walker.finish()))
+    let mut pieces = walker.finish();
+
+    // TULA FORK: direct paragraph presentation rides as a zero-width leading
+    // inline. Headings and plain paragraphs carry it; list items do not (an
+    // item's indentation comes from its nesting level, and applying w:ind on
+    // top would double-indent — same rule as the reference converter).
+    if !matches!(kind, ParaKind::ListItem { .. }) {
+        let props = para_props(ppr);
+        if !props.is_empty() {
+            let marker = Inline::ParaPres(Box::new(props));
+            match pieces.iter_mut().find_map(|piece| match piece {
+                Piece::Inlines(inlines) => Some(inlines),
+                Piece::Blocks(_) => None,
+            }) {
+                Some(inlines) => inlines.insert(0, marker),
+                None => pieces.insert(0, Piece::Inlines(vec![marker])),
+            }
+        }
+    }
+    Ok((kind, pieces))
 }
 
 /// Resolve a paragraph's effective numbering per ECMA-376: the direct
@@ -772,7 +824,23 @@ pub(super) fn parse_table(tbl: &Element, ctx: &Ctx) -> Result<Vec<Block>, Conver
                 for merged in &tc.merged {
                     blocks.extend(parse_blocks(merged, ctx)?);
                 }
-                builder.place(Cell::spanning(blocks, tc.col_span as u32, tc.row_span as u32))?;
+                let mut cell = Cell::spanning(blocks, tc.col_span as u32, tc.row_span as u32);
+                // TULA FORK: authored cell presentation from w:tcPr. Width
+                // only when the type is dxa (twips) - pct/auto widths are the
+                // grid's business, not the cell's.
+                if let Some(tcpr) = tc.elem.and_then(|e| e.find(ns::W, "tcPr")) {
+                    if let Some(tcw) = tcpr.find(ns::W, "tcW")
+                        && tcw.attr(ns::W, "type").is_none_or(|t| t == "dxa")
+                    {
+                        cell.width_twips = tcw.attr(ns::W, "w").and_then(|v| v.parse().ok());
+                    }
+                    cell.background = tcpr
+                        .find(ns::W, "shd")
+                        .and_then(|shd| shd.attr(ns::W, "fill"))
+                        .filter(|f| *f != "auto")
+                        .and_then(crate::model::parse_hex_color);
+                }
+                builder.place(cell)?;
             }
         }
     }
@@ -796,6 +864,36 @@ pub(super) fn parse_table(tbl: &Element, ctx: &Ctx) -> Result<Vec<Block>, Conver
         .unwrap_or_default();
     if !widths.is_empty() {
         table.column_widths = Some(widths);
+    }
+
+    // TULA FORK: w:tblBorders. An edge with style none/nil draws nothing and
+    // stays absent; the default w:sz is 4 eighths (a hairline), per Word.
+    if let Some(tbl_borders) = tbl.find(ns::W, "tblPr").and_then(|p| p.find(ns::W, "tblBorders")) {
+        let edge = |name: &str| -> Option<crate::model::BorderEdge> {
+            let e = tbl_borders.find(ns::W, name)?;
+            let style = e.attr(ns::W, "val")?;
+            if style == "none" || style == "nil" {
+                return None;
+            }
+            Some(crate::model::BorderEdge {
+                width_eighths: e.attr(ns::W, "sz").and_then(|v| v.parse().ok()).unwrap_or(4),
+                color: e
+                    .attr(ns::W, "color")
+                    .filter(|c| *c != "auto")
+                    .and_then(crate::model::parse_hex_color),
+            })
+        };
+        let borders = crate::model::TableBorders {
+            top: edge("top"),
+            bottom: edge("bottom"),
+            left: edge("left").or_else(|| edge("start")),
+            right: edge("right").or_else(|| edge("end")),
+            inside_h: edge("insideH"),
+            inside_v: edge("insideV"),
+        };
+        if borders != crate::model::TableBorders::default() {
+            table.borders = Some(borders);
+        }
     }
 
     Ok(vec![Block::Table(table)])
