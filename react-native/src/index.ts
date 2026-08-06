@@ -96,21 +96,21 @@ function parseResultBuffer(buffer: ArrayBuffer): ConvertResult {
 function utf8Decode(bytes: Uint8Array): string {
   const codes: number[] = []
   let i = 0
+  // Indexing is bounds-safe by construction (the Rust side always emits
+  // complete UTF-8), but the app compiles with noUncheckedIndexedAccess.
+  const at = (index: number): number => bytes[index] ?? 0
   while (i < bytes.length) {
-    const b = bytes[i++]
+    const b = at(i++)
     let c: number
     if (b < 0x80) {
       c = b
     } else if (b < 0xe0) {
-      c = ((b & 0x1f) << 6) | (bytes[i++] & 0x3f)
+      c = ((b & 0x1f) << 6) | (at(i++) & 0x3f)
     } else if (b < 0xf0) {
-      c = ((b & 0x0f) << 12) | ((bytes[i++] & 0x3f) << 6) | (bytes[i++] & 0x3f)
+      c = ((b & 0x0f) << 12) | ((at(i++) & 0x3f) << 6) | (at(i++) & 0x3f)
     } else {
       c =
-        (((b & 0x07) << 18) |
-          ((bytes[i++] & 0x3f) << 12) |
-          ((bytes[i++] & 0x3f) << 6) |
-          (bytes[i++] & 0x3f)) -
+        (((b & 0x07) << 18) | ((at(i++) & 0x3f) << 12) | ((at(i++) & 0x3f) << 6) | (at(i++) & 0x3f)) -
         0x10000
       codes.push(0xd800 | (c >> 10), 0xdc00 | (c & 0x3ff))
       continue

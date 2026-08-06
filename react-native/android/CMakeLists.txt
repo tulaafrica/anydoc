@@ -11,6 +11,7 @@ add_library(
   ${PACKAGE_NAME}
   SHARED
   ../cpp/HybridDocumentConverter.cpp
+  ../cpp/cpp-adapter.cpp
 )
 include_directories(../cpp)
 
