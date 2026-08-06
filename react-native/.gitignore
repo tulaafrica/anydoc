@@ -1,3 +1,4 @@
 node_modules/
 android/libs/
 android/build/
+android/.cxx/
