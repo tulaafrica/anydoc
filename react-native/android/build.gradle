@@ -20,9 +20,9 @@ android {
     // Follow the app's ABI selection (a -PreactNativeArchitectures=arm64-v8a
     // dev build must not force an armv7 link against libraries that were
     // never built), intersected with the ABIs the Rust core ships for.
-    // x86 emulators fall back to the JS converter (see the README).
+    // 32-bit x86 emulators (rare since 2021 images) get no native slice.
     ndk {
-      def supported = ["arm64-v8a", "armeabi-v7a"]
+      def supported = ["arm64-v8a", "armeabi-v7a", "x86_64"]
       def requested = rootProject.hasProperty("reactNativeArchitectures")
         ? rootProject.property("reactNativeArchitectures").toString().split(",").toList()
         : supported
@@ -69,3 +69,37 @@ dependencies {
 
 // Nitrogen's generated Kotlin sources + the "boosted by nitro" banner.
 apply from: '../nitrogen/generated/android/RNAnydoc+autolinking.gradle'
+
+// ---- Prebuilt Rust core -------------------------------------------------
+// The static libraries are too large for the npm tarball (~90MB per ABI),
+// so they ship as a GitHub Release asset and are fetched on first build.
+// Building from source instead (`yarn build:rust`, needs the Rust
+// toolchain) drops the same files in libs/ and this task self-skips.
+def anydocLibsVersion = "0.1.0"
+def anydocLibsUrl = project.hasProperty("anydocLibsUrl")
+  ? project.property("anydocLibsUrl").toString()
+  : "https://github.com/tulaafrica/anydoc/releases/download/rn-v${anydocLibsVersion}/anydoc-android-libs-${anydocLibsVersion}.zip"
+
+tasks.register("downloadAnydocPrebuilt") {
+  def libsRoot = file("libs")
+  def abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+  onlyIf { abis.any { !new File(libsRoot, "${it}/libanydoc_mobile.a").exists() } }
+  doLast {
+    def zip = new File(buildDir, "anydoc-android-libs.zip")
+    zip.parentFile.mkdirs()
+    logger.lifecycle("Downloading anydoc prebuilt libraries: ${anydocLibsUrl}")
+    ant.get(src: anydocLibsUrl, dest: zip, verbose: false)
+    // The zip's layout is libs/<abi>/libanydoc_mobile.a, rooted here.
+    copy {
+      from zipTree(zip)
+      into projectDir
+    }
+    abis.each { abi ->
+      def lib = new File(libsRoot, "${abi}/libanydoc_mobile.a")
+      if (!lib.exists()) {
+        throw new GradleException("anydoc prebuilt download missing ${abi} - re-run, or build from source with scripts/build-rust.sh")
+      }
+    }
+  }
+}
+preBuild.dependsOn("downloadAnydocPrebuilt")

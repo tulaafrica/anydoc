@@ -12,11 +12,13 @@ BIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
 
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$BIN/aarch64-linux-android24-clang"
 export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$BIN/armv7a-linux-androideabi24-clang"
+export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$BIN/x86_64-linux-android24-clang"
 
-for target in aarch64-linux-android armv7-linux-androideabi; do
+for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
   case $target in
     aarch64-linux-android) abi=arm64-v8a ;;
     armv7-linux-androideabi) abi=armeabi-v7a ;;
+    x86_64-linux-android) abi=x86_64 ;;
   esac
   echo "==> $target ($abi)"
   (cd .. && cargo build --release -p anydoc-mobile --target $target)

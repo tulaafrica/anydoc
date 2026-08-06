@@ -1,10 +1,11 @@
 /**
- * rn-anydoc: any office document -> DocumentIR, natively, off the JS thread.
+ * react-native-anydoc: any office document -> DocumentIR, natively, off the
+ * JS thread.
  *
- * The API mirrors rn-docx-ir's `convertDocxToIr` contract exactly - same
- * result shape, same never-throws-for-document-reasons promise - so the
- * document pipeline can route by format without knowing which converter
- * produced the IR.
+ * The result shape and the never-rejects-for-document-reasons promise are
+ * the package's public contract (see README) - a caller can route documents
+ * by format across multiple converters without knowing which one produced
+ * the IR.
  */
 
 import { NitroModules } from 'react-native-nitro-modules'

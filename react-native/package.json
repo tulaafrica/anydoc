@@ -1,9 +1,30 @@
 {
-  "name": "rn-anydoc",
+  "name": "react-native-anydoc",
   "version": "0.1.0",
-  "description": "Tula's universal document converter: any office document to DocumentIR, natively, off the JS thread",
+  "description": "Any office document (docx, doc, pptx, xlsx, odt, rtf, epub…) to a structured DocumentIR, converted natively in Rust, off the JS thread",
   "main": "src/index.ts",
   "license": "MIT",
+  "author": "Tula (https://github.com/tulaafrica)",
+  "homepage": "https://github.com/tulaafrica/anydoc/tree/tula/presentation-ir/react-native",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tulaafrica/anydoc.git",
+    "directory": "react-native"
+  },
+  "keywords": [
+    "react-native",
+    "nitro",
+    "document",
+    "docx",
+    "doc",
+    "pptx",
+    "xlsx",
+    "odt",
+    "rtf",
+    "epub",
+    "converter",
+    "rust"
+  ],
   "scripts": {
     "codegen": "nitrogen",
     "build:rust": "./scripts/build-rust.sh"
@@ -17,5 +38,16 @@
     "react-native-nitro-modules": "0.36.1",
     "typescript": "^5.5.0"
   },
-  "files": ["src", "cpp", "android", "nitrogen", "nitro.json", "README.md"]
+  "files": [
+    "src",
+    "cpp",
+    "android",
+    "nitrogen",
+    "nitro.json",
+    "scripts",
+    "README.md",
+    "!android/build",
+    "!android/.cxx",
+    "!android/libs"
+  ]
 }
