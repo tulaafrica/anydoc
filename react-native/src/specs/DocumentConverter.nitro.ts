@@ -1,16 +1,28 @@
 import type { HybridObject } from 'react-native-nitro-modules'
 
 /**
- * The one native call: document bytes in, one result buffer out, converted
- * on Nitro's thread pool so the JS thread never blocks.
+ * What the native layer hands back, already split:
  *
- * Result buffer layout (see anydoc/mobile/src/lib.rs, the single source of
- * truth): [u32 LE json length][DocumentIR JSON, UTF-8][asset bytes]. The
- * JSON's `assets` array carries each asset's offset/length into the trailing
- * blob. The call NEVER rejects for document reasons — every malformed,
- * encrypted or hostile input resolves to a {"status":"fallback"} payload.
+ * - `json`: the DocumentIR result JSON as a STRING. The Rust side emits one
+ *   buffer ([u32 LE json length][JSON UTF-8][asset bytes]); the C++ layer
+ *   peels the JSON off and bridges it as a string so the UTF-8 -> UTF-16
+ *   conversion happens natively. Decoding half a megabyte of JSON in JS was
+ *   the single dominant cost of a conversion on dev-mode Hermes.
+ * - `assets`: the trailing asset blob, zero-copy. The JSON's `assets` array
+ *   carries each asset's offset/length into THIS buffer.
+ */
+export interface NativeConvertOutput {
+  json: string
+  assets: ArrayBuffer
+}
+
+/**
+ * The one native call: document bytes in, converted on Nitro's thread pool
+ * so the JS thread never blocks. NEVER rejects for document reasons — every
+ * malformed, encrypted or hostile input resolves to a {"status":"fallback"}
+ * payload (anydoc/mobile/src/lib.rs is the single source of truth).
  */
 export interface DocumentConverter
   extends HybridObject<{ ios: 'c++'; android: 'c++' }> {
-  convert(document: ArrayBuffer): Promise<ArrayBuffer>
+  convert(document: ArrayBuffer): Promise<NativeConvertOutput>
 }

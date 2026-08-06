@@ -8,7 +8,7 @@
  */
 
 import { NitroModules } from 'react-native-nitro-modules'
-import type { DocumentConverter } from './specs/DocumentConverter.nitro'
+import type { DocumentConverter, NativeConvertOutput } from './specs/DocumentConverter.nitro'
 
 /** One extracted asset (image bytes referenced by the IR's assetRefs). */
 export interface ConvertedAsset {
@@ -55,19 +55,16 @@ export async function convertDocumentToIr(
       : bytes
 
   const output = await getConverter().convert(input)
-  return parseResultBuffer(output)
+  return parseResult(output)
 }
 
 /**
- * The Rust side's buffer layout (anydoc/mobile/src/lib.rs):
- * [u32 LE json length][DocumentIR JSON, UTF-8][asset bytes], with each
- * asset's offset/length into the trailing blob declared in the JSON.
+ * The native layer already split the Rust buffer: the result JSON arrives as
+ * a string (UTF-8 -> UTF-16 done in C++), and `assets` is the raw trailing
+ * blob with each asset's offset/length declared in the JSON.
  */
-function parseResultBuffer(buffer: ArrayBuffer): ConvertResult {
-  const view = new DataView(buffer)
-  const jsonLength = view.getUint32(0, true)
-  const json = utf8Decode(new Uint8Array(buffer, 4, jsonLength))
-  const parsed = JSON.parse(json)
+function parseResult(output: NativeConvertOutput): ConvertResult {
+  const parsed = JSON.parse(output.json)
 
   if (parsed.status !== 'ok') {
     return {
@@ -77,51 +74,16 @@ function parseResultBuffer(buffer: ArrayBuffer): ConvertResult {
     }
   }
 
-  const blobStart = 4 + jsonLength
+  const blob = output.assets
   const assets: ConvertedAsset[] = (parsed.assets ?? []).map(
     (asset: { assetRef: string; contentType?: string; offset: number; length: number }) => ({
       assetRef: asset.assetRef,
       contentType: asset.contentType ?? null,
-      bytes: buffer.slice(blobStart + asset.offset, blobStart + asset.offset + asset.length),
+      bytes: blob.slice(asset.offset, asset.offset + asset.length),
     }),
   )
 
   return { status: 'ok', ir: parsed.ir, assets, warnings: [] }
-}
-
-/**
- * UTF-8 decode without TextDecoder, which Hermes does not have. Chunked
- * String.fromCharCode.apply keeps call-stack use bounded on large documents.
- */
-function utf8Decode(bytes: Uint8Array): string {
-  const codes: number[] = []
-  let i = 0
-  // Indexing is bounds-safe by construction (the Rust side always emits
-  // complete UTF-8), but the app compiles with noUncheckedIndexedAccess.
-  const at = (index: number): number => bytes[index] ?? 0
-  while (i < bytes.length) {
-    const b = at(i++)
-    let c: number
-    if (b < 0x80) {
-      c = b
-    } else if (b < 0xe0) {
-      c = ((b & 0x1f) << 6) | (at(i++) & 0x3f)
-    } else if (b < 0xf0) {
-      c = ((b & 0x0f) << 12) | ((at(i++) & 0x3f) << 6) | (at(i++) & 0x3f)
-    } else {
-      c =
-        (((b & 0x07) << 18) | ((at(i++) & 0x3f) << 12) | ((at(i++) & 0x3f) << 6) | (at(i++) & 0x3f)) -
-        0x10000
-      codes.push(0xd800 | (c >> 10), 0xdc00 | (c & 0x3ff))
-      continue
-    }
-    codes.push(c)
-  }
-  let out = ''
-  for (let start = 0; start < codes.length; start += 8192) {
-    out += String.fromCharCode.apply(null, codes.slice(start, start + 8192))
-  }
-  return out
 }
 
 export type { DocumentConverter }

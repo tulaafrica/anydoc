@@ -25,4 +25,4 @@ add_library(anydoc_core STATIC IMPORTED)
 set_target_properties(anydoc_core PROPERTIES
   IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/libs/${ANDROID_ABI}/libanydoc_mobile.a
 )
-target_link_libraries(${PACKAGE_NAME} anydoc_core)
+target_link_libraries(${PACKAGE_NAME} anydoc_core log)

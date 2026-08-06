@@ -13,10 +13,12 @@
 #error NitroModules cannot be found! Are you sure you installed NitroModules properly?
 #endif
 
+// Forward declaration of `NativeConvertOutput` to properly resolve imports.
+namespace margelo::nitro::tula::anydoc { struct NativeConvertOutput; }
 
-
-#include <NitroModules/ArrayBuffer.hpp>
+#include "NativeConvertOutput.hpp"
 #include <NitroModules/Promise.hpp>
+#include <NitroModules/ArrayBuffer.hpp>
 
 namespace margelo::nitro::tula::anydoc {
 
@@ -49,7 +51,7 @@ namespace margelo::nitro::tula::anydoc {
 
     public:
       // Methods
-      virtual std::shared_ptr<Promise<std::shared_ptr<ArrayBuffer>>> convert(const std::shared_ptr<ArrayBuffer>& document) = 0;
+      virtual std::shared_ptr<Promise<NativeConvertOutput>> convert(const std::shared_ptr<ArrayBuffer>& document) = 0;
 
     protected:
       // Hybrid Setup
