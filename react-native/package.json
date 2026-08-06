@@ -1,0 +1,21 @@
+{
+  "name": "rn-anydoc",
+  "version": "0.1.0",
+  "description": "Tula's universal document converter: any office document to DocumentIR, natively, off the JS thread",
+  "main": "src/index.ts",
+  "license": "MIT",
+  "scripts": {
+    "codegen": "nitrogen",
+    "build:rust": "./scripts/build-rust.sh"
+  },
+  "peerDependencies": {
+    "react-native": "*",
+    "react-native-nitro-modules": "^0.36.1"
+  },
+  "devDependencies": {
+    "nitrogen": "0.36.1",
+    "react-native-nitro-modules": "0.36.1",
+    "typescript": "^5.5.0"
+  },
+  "files": ["src", "cpp", "android", "nitrogen", "nitro.json", "README.md"]
+}

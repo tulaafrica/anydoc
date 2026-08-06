@@ -1,0 +1,28 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": [
+    "tula",
+    "anydoc"
+  ],
+  "ios": {
+    "iosModuleName": "RNAnydoc"
+  },
+  "android": {
+    "androidNamespace": [
+      "tula",
+      "anydoc"
+    ],
+    "androidCxxLibName": "RNAnydoc"
+  },
+  "autolinking": {
+    "DocumentConverter": {
+      "all": {
+        "language": "c++",
+        "implementationClassName": "HybridDocumentConverter"
+      }
+    }
+  },
+  "ignorePaths": [
+    "node_modules"
+  ]
+}
