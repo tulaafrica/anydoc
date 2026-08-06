@@ -237,10 +237,7 @@ fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), Con
     // docDefaults base. Headings use the same resolution as body text.
     // TULA FORK: presentation from the same chain layers over the base by
     // plain inheritance - nearest specification wins, not parity.
-    let (parity, pres) = match pstyle_id {
-        Some(id) => (ctx.styles.run_toggles(id)?, ctx.styles.run_pres(id, ctx.fonts)?),
-        None => Default::default(),
-    };
+    let (parity, pres) = ctx.styles.run_layers_for(pstyle_id, ctx.fonts)?;
     let paragraph_level = pres.apply(parity.apply_over(ctx.styles.doc_defaults));
 
     let kind = match heading {

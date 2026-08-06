@@ -26,6 +26,10 @@ fn main() {
         if status.trim() == "fallback" {
             println!("         {}", &json[..json.len().min(120)]);
         }
+        // ANYDOC_DUMP=1: emit the whole IR JSON, for host-side fidelity diffs.
+        if std::env::var("ANYDOC_DUMP").is_ok() {
+            println!("{json}");
+        }
         unsafe { anydoc_mobile::anydoc_tula_free(out, out_len) };
     }
 }

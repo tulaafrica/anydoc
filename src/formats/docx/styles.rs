@@ -185,6 +185,23 @@ impl<'a> Styles<'a> {
         Ok(acc)
     }
 
+    /// TULA FORK: toggle parity and presentation for a paragraph's style
+    /// layer: its own `pStyle`, or the DEFAULT paragraph style when it names
+    /// none - the same "unstyled means Normal" rule as
+    /// [`Styles::para_props_for`]. Without this, a document whose sizes live
+    /// on Normal rather than in docDefaults (Word's Strict serialization
+    /// does this) renders every unstyled run at the wrong size.
+    pub fn run_layers_for(
+        &self,
+        pstyle_id: Option<&str>,
+        fonts: &FontTable,
+    ) -> Result<(Toggles, StyleDelta), ConvertError> {
+        match pstyle_id.or(self.default_para_style) {
+            Some(id) => Ok((self.run_toggles(id)?, self.run_pres(id, fonts)?)),
+            None => Ok(Default::default()),
+        }
+    }
+
     /// TULA FORK: paragraph presentation along a style's `basedOn` chain,
     /// over the docDefaults layer. Nearest specification wins per field;
     /// the caller overlays direct pPr formatting on the result.
