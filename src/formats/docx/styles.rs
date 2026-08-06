@@ -7,7 +7,7 @@
 //! formatting is absolute on/off.
 
 use crate::error::ConvertError;
-use crate::model::{FontId, Style};
+use crate::model::{Align, FontId, ParaProps, Style};
 use crate::package::xml::{Element, ns};
 use crate::shared::chain::StyleChains;
 use crate::shared::delta::StyleDelta;
@@ -100,24 +100,41 @@ impl FontTable {
 
 pub struct Styles<'a> {
     chains: StyleChains<'a, Element>,
+    /// TULA FORK: the default paragraph style's id (w:default="1"), which
+    /// every paragraph WITHOUT an explicit pStyle inherits from.
+    default_para_style: Option<&'a str>,
     /// docDefaults as absolute values (the base the toggles flip over).
     pub doc_defaults: Style,
+    /// TULA FORK: docDefaults paragraph presentation (w:pPrDefault) - the
+    /// root layer under every paragraph style chain.
+    pub doc_default_para: ParaProps,
 }
 
 impl<'a> Styles<'a> {
     pub fn parse_opt(root: Option<&'a Element>, fonts: &FontTable) -> Styles<'a> {
         match root {
             Some(root) => Styles::parse(root, fonts),
-            None => Styles { chains: StyleChains::default(), doc_defaults: Style::PLAIN },
+            None => Styles {
+                chains: StyleChains::default(),
+                default_para_style: None,
+                doc_defaults: Style::PLAIN,
+                doc_default_para: ParaProps::default(),
+            },
         }
     }
 
     pub fn parse(root: &'a Element, fonts: &FontTable) -> Styles<'a> {
         let mut chains = StyleChains::default();
+        let mut default_para_style = None;
         for style in root.find_all(ns::W, "style") {
             if let Some(id) = style.attr(ns::W, "styleId") {
                 let parent = style.find(ns::W, "basedOn").and_then(|e| e.attr(ns::W, "val"));
                 chains.insert(id, style, parent);
+                if style.attr(ns::W, "type") == Some("paragraph")
+                    && matches!(style.attr(ns::W, "default"), Some("1" | "true"))
+                {
+                    default_para_style = Some(id);
+                }
             }
         }
         let doc_defaults = root
@@ -126,7 +143,13 @@ impl<'a> Styles<'a> {
             .and_then(|d| d.find(ns::W, "rPr"))
             .map(|rpr| rpr_delta(rpr, fonts).resolve())
             .unwrap_or(Style::PLAIN);
-        Styles { chains, doc_defaults }
+        let doc_default_para = root
+            .find(ns::W, "docDefaults")
+            .and_then(|d| d.find(ns::W, "pPrDefault"))
+            .and_then(|d| d.find(ns::W, "pPr"))
+            .map(ppr_props)
+            .unwrap_or_default();
+        Styles { chains, default_para_style, doc_defaults, doc_default_para }
     }
 
     /// The parity of `true` toggle specifications along a style's `basedOn`
@@ -160,6 +183,31 @@ impl<'a> Styles<'a> {
             None
         })?;
         Ok(acc)
+    }
+
+    /// TULA FORK: paragraph presentation along a style's `basedOn` chain,
+    /// over the docDefaults layer. Nearest specification wins per field;
+    /// the caller overlays direct pPr formatting on the result.
+    /// The chain layer for a paragraph: its own pStyle, or the DEFAULT
+    /// paragraph style when it names none - an unstyled paragraph in Word is
+    /// not unstyled, it is "Normal".
+    pub fn para_props_for(&self, pstyle_id: Option<&str>) -> Result<ParaProps, ConvertError> {
+        match pstyle_id.or(self.default_para_style) {
+            Some(id) => self.para_props(id),
+            None => Ok(self.doc_default_para),
+        }
+    }
+
+    pub fn para_props(&self, id: &str) -> Result<ParaProps, ConvertError> {
+        let mut acc = ParaProps::default();
+        self.chains.walk::<()>(id, |style| {
+            if let Some(ppr) = style.find(ns::W, "pPr") {
+                // `acc` is nearer the child, so acc's fields win.
+                acc = merge_para(ppr_props(ppr), acc);
+            }
+            None
+        })?;
+        Ok(merge_para(self.doc_default_para, acc))
     }
 
     /// Heading level a paragraph style resolves to, from its name
@@ -233,6 +281,51 @@ impl<'a> Styles<'a> {
             .parse()
             .ok()
     }
+}
+
+/// TULA FORK: overlay `child` on `base`, per field.
+pub fn merge_para(base: ParaProps, child: ParaProps) -> ParaProps {
+    ParaProps {
+        align: child.align.or(base.align),
+        indent_start: child.indent_start.or(base.indent_start),
+        indent_end: child.indent_end.or(base.indent_end),
+        indent_first_line: child.indent_first_line.or(base.indent_first_line),
+        indent_hanging: child.indent_hanging.or(base.indent_hanging),
+        spacing_before: child.spacing_before.or(base.spacing_before),
+        spacing_after: child.spacing_after.or(base.spacing_after),
+        line_240ths: child.line_240ths.or(base.line_240ths),
+    }
+}
+
+/// TULA FORK: the paragraph presentation a `w:pPr` element specifies
+/// directly (w:jc, w:ind, w:spacing). Shared by direct formatting, the
+/// style chain and docDefaults - the same element shape appears in all
+/// three places.
+pub fn ppr_props(ppr: &Element) -> ParaProps {
+    let mut props = ParaProps::default();
+    if let Some(jc) = ppr.find(ns::W, "jc").and_then(|e| e.attr(ns::W, "val")) {
+        props.align = Align::parse(jc);
+    }
+    if let Some(ind) = ppr.find(ns::W, "ind") {
+        let read = |names: &[&str]| {
+            names.iter().find_map(|n| ind.attr(ns::W, n)).and_then(|v| v.parse().ok())
+        };
+        props.indent_start = read(&["start", "left"]);
+        props.indent_end = read(&["end", "right"]);
+        props.indent_first_line = read(&["firstLine"]);
+        props.indent_hanging = read(&["hanging"]);
+    }
+    if let Some(spacing) = ppr.find(ns::W, "spacing") {
+        let read = |n: &str| spacing.attr(ns::W, n).and_then(|v| v.parse().ok());
+        props.spacing_before = read("before");
+        props.spacing_after = read("after");
+        // w:line is a straight multiple only under lineRule="auto"; exact and
+        // atLeast are absolute heights a flow renderer cannot honour.
+        if spacing.attr(ns::W, "lineRule").is_none_or(|r| r == "auto") {
+            props.line_240ths = read("line");
+        }
+    }
+    props
 }
 
 /// A `w:rPr` element as a tri-state delta - used only for *direct* run

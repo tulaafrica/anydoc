@@ -5,7 +5,7 @@
 //! knowing which produced it. Emitted as one JSON string by a hand-rolled
 //! writer - serde would cost ~300kB of binary for a fixed, known shape.
 
-use anydoc::model::{Align, Block, CellSlot, Document, Inline, ParaProps, Style};
+use anydoc::model::{Align, Block, CellSlot, CommentMarkKind, Document, Inline, ParaProps, Style};
 
 /// A resolved asset the caller must carry alongside the IR.
 pub struct IrAsset<'a> {
@@ -74,8 +74,12 @@ fn str_field(out: &mut String, key: &str, value: &str) {
 /// One IR text run. Formatting fields mirror rn-docx-ir's TextRun; only set
 /// fields are emitted (the IR is encrypted into a message body - an unset
 /// property must not cost bytes).
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Default)]
 struct RunFormat {
+    /// Ids of the comments whose range covers this run. Part of run identity:
+    /// runs under different coverage must never merge, or a comment highlight
+    /// bleeds past its span.
+    comment_ids: Vec<String>,
     bold: bool,
     italic: bool,
     underline: bool,
@@ -101,6 +105,7 @@ fn run_format(style: &Style, fonts: &[String]) -> RunFormat {
         // `code` with no explicit face still needs a monospace hint.
         .or_else(|| if style.code { Some("Courier New".to_string()) } else { None });
     RunFormat {
+        comment_ids: Vec::new(),
         bold: style.bold,
         italic: style.italic,
         underline: style.underline,
@@ -164,6 +169,18 @@ fn write_runs(runs: &[Run], out: &mut String) {
             out.push(',');
             str_field(out, "caps", c);
         }
+        if !f.comment_ids.is_empty() {
+            out.push_str(",\"commentIds\":[");
+            for (j, id) in f.comment_ids.iter().enumerate() {
+                if j > 0 {
+                    out.push(',');
+                }
+                out.push('"');
+                esc(id, out);
+                out.push('"');
+            }
+            out.push(']');
+        }
         out.push('}');
     }
     out.push(']');
@@ -176,6 +193,15 @@ struct Emitter<'a> {
     /// Assets actually referenced by an emitted image block, in first-use
     /// order. (asset index in doc.assets, assetRef)
     used: Vec<(usize, String)>,
+    /// Comment ranges open at the current point of the walk, in opening
+    /// order. Document-wide: a range may open in one paragraph and close in
+    /// another, or in a table cell.
+    open_comments: Vec<String>,
+    /// Comments that had a range anywhere - a bare reference for one of
+    /// these adds nothing (its runs are already stamped).
+    had_range: std::collections::HashSet<String>,
+    /// Point references seen before any text run existed to attach to.
+    pending_comment_ids: Vec<String>,
 }
 
 enum Segment {
@@ -222,7 +248,10 @@ impl<'a> Emitter<'a> {
             for inline in inlines {
                 match inline {
                     Inline::Text { text, style } => {
-                        push_run(current, text, run_format(style, &emitter.doc.fonts));
+                        let mut format = run_format(style, &emitter.doc.fonts);
+                        format.comment_ids = emitter.open_comments.clone();
+                        format.comment_ids.append(&mut emitter.pending_comment_ids);
+                        push_run(current, text, format);
                     }
                     Inline::Link { content, .. } => {
                         // IR v2 has no link type: keep the text, lose the href.
@@ -241,23 +270,36 @@ impl<'a> Emitter<'a> {
                         // as rn-docx-ir: fetching would leak the open.
                     }
                     Inline::LineBreak => {
-                        push_run(
-                            current,
-                            "\n",
-                            RunFormat {
-                                bold: false,
-                                italic: false,
-                                underline: false,
-                                strikethrough: false,
-                                highlight: None,
-                                font: None,
-                                size_px: None,
-                                color: None,
-                                vert: None,
-                                caps: None,
-                            },
-                        );
+                        // A break inside an open comment range keeps its
+                        // coverage, so the highlight is continuous.
+                        let mut format = RunFormat::default();
+                        format.comment_ids = emitter.open_comments.clone();
+                        push_run(current, "\n", format);
                     }
+                    Inline::CommentMark { id, kind } => match kind {
+                        CommentMarkKind::RangeStart => {
+                            emitter.open_comments.push(id.clone());
+                            emitter.had_range.insert(id.clone());
+                        }
+                        CommentMarkKind::RangeEnd => {
+                            if let Some(pos) =
+                                emitter.open_comments.iter().position(|open| open == id)
+                            {
+                                emitter.open_comments.remove(pos);
+                            }
+                        }
+                        CommentMarkKind::Reference => {
+                            // The mark sits at the END of the span. Ranged
+                            // comments are already stamped; a point comment
+                            // anchors on the nearest run.
+                            if !emitter.had_range.contains(id) {
+                                match current.last_mut() {
+                                    Some(last) => last.format.comment_ids.push(id.clone()),
+                                    None => emitter.pending_comment_ids.push(id.clone()),
+                                }
+                            }
+                        }
+                    },
                     // Zero-width in the source; nothing to draw. Slide anchors
                     // are handled a level up as page breaks; ParaPres is
                     // lifted onto the block by write_block.
@@ -302,8 +344,15 @@ impl<'a> Emitter<'a> {
                 }
             }
             Block::Paragraph(inlines) => {
+                let only_marks = !inlines.is_empty()
+                    && inlines.iter().all(|i| matches!(i, Inline::CommentMark { .. }));
                 let props = para_props_of(inlines).copied();
                 let segments = self.segments(inlines);
+                if only_marks {
+                    // Synthetic carrier for block-level comment markers: the
+                    // segments() call above updated the tracker; nothing to draw.
+                    return;
+                }
                 if segments.is_empty() {
                     // A genuinely empty paragraph is meaningful vertical space
                     // - and its spacing (a spacer paragraph) still matters.
@@ -567,6 +616,33 @@ fn write_layout(props: &ParaProps, out: &mut String) {
     }
 }
 
+/// A comment body flattened to text: paragraphs joined by newlines. Comment
+/// prose is not worth carrying formatting for - same rule as rn-docx-ir.
+fn comment_text(blocks: &[Block]) -> String {
+    let mut paragraphs: Vec<String> = Vec::new();
+    fn collect(blocks: &[Block], out: &mut Vec<String>) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
+                    let text = anydoc::model::inlines_to_plain_text(inlines);
+                    if !text.trim().is_empty() {
+                        out.push(text);
+                    }
+                }
+                Block::List(list) => {
+                    for item in &list.items {
+                        collect(&item.blocks, out);
+                    }
+                }
+                Block::BlockQuote(inner) => collect(inner, out),
+                _ => {}
+            }
+        }
+    }
+    collect(blocks, &mut paragraphs);
+    paragraphs.join("\n")
+}
+
 /// The leading ParaPres marker of a paragraph's inline stream, if any.
 fn para_props_of(inlines: &[Inline]) -> Option<&ParaProps> {
     inlines.iter().find_map(|i| match i {
@@ -607,7 +683,13 @@ pub fn document_to_ir<'a>(doc: &'a Document, source_type: &str) -> IrOutput<'a> 
         pages.last_mut().unwrap().push(block);
     }
 
-    let mut emitter = Emitter { doc, used: Vec::new() };
+    let mut emitter = Emitter {
+        doc,
+        used: Vec::new(),
+        open_comments: Vec::new(),
+        had_range: std::collections::HashSet::new(),
+        pending_comment_ids: Vec::new(),
+    };
     let mut json = String::with_capacity(16 * 1024);
     json.push_str("{\"status\":\"ok\",\"ir\":{\"version\":2,");
     str_field(&mut json, "sourceType", source_type);
@@ -623,7 +705,34 @@ pub fn document_to_ir<'a>(doc: &'a Document, source_type: &str) -> IrOutput<'a> 
         }
         json.push_str("]}");
     }
-    json.push_str("]},\"assets\":[");
+    json.push_str("]");
+    if !doc.comments.is_empty() {
+        json.push_str(",\"comments\":[");
+        for (i, comment) in doc.comments.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push('{');
+            str_field(&mut json, "id", &comment.id);
+            if let Some(author) = &comment.author {
+                json.push(',');
+                str_field(&mut json, "author", author);
+            }
+            if let Some(initials) = &comment.initials {
+                json.push(',');
+                str_field(&mut json, "initials", initials);
+            }
+            if let Some(date) = &comment.date {
+                json.push(',');
+                str_field(&mut json, "date", date);
+            }
+            json.push(',');
+            str_field(&mut json, "text", &comment_text(&comment.blocks));
+            json.push('}');
+        }
+        json.push(']');
+    }
+    json.push_str("},\"assets\":[");
 
     let mut assets = Vec::new();
     let mut offset = 0usize;

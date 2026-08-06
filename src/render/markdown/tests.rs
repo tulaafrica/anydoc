@@ -10,6 +10,7 @@ fn doc(blocks: Vec<Block>) -> String {
         notes: Vec::new(),
         assets: Vec::new(),
         fonts: Vec::new(),
+        comments: Vec::new(),
     })
 }
 
@@ -399,6 +400,7 @@ fn footnotes() {
         ],
         assets: Vec::new(),
         fonts: Vec::new(),
+        comments: Vec::new(),
     });
     assert_eq!(
         md,
@@ -419,6 +421,7 @@ fn empty_and_unreferenced_notes() {
         ],
         assets: Vec::new(),
         fonts: Vec::new(),
+        comments: Vec::new(),
     });
     assert_eq!(md, "Text\n\n[^1]: Kept.\n");
 }
@@ -433,6 +436,7 @@ fn duplicate_note_ids_render_one_definition() {
         ],
         assets: Vec::new(),
         fonts: Vec::new(),
+        comments: Vec::new(),
     });
     assert_eq!(md, "Text[^1]\n\n[^1]: First wins.\n");
 }

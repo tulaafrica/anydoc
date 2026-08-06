@@ -1015,6 +1015,7 @@ impl<'a> Parser<'a> {
             notes: self.dest.notes,
             assets: self.assets.assets,
             fonts: Vec::new(),
+            comments: Vec::new(),
         })
     }
 }

@@ -84,7 +84,7 @@ fn block_bytes(blocks: &[Block]) -> u64 {
             .iter()
             .map(|i| match i {
                 Inline::Text { text, .. } => text.len() as u64,
-                Inline::ParaPres(_) => 0,
+                Inline::ParaPres(_) | Inline::CommentMark { .. } => 0,
                 Inline::Link { content, target } => {
                     let target_len = match target {
                         crate::model::LinkTarget::External(s)

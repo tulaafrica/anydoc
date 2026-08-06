@@ -15,7 +15,7 @@ mod table;
 
 pub use asset::{Asset, AssetId};
 pub use block::Block;
-pub use inline::{Inline, inlines_are_empty, inlines_to_plain_text};
+pub use inline::{CommentMarkKind, Inline, inlines_are_empty, inlines_to_plain_text};
 pub use link::{AnchorId, ImageSource, LinkTarget};
 pub use list::{List, ListItem, MarkerKind};
 pub use style::{Align, Caps, FontId, Highlight, ParaProps, Style, VertAlign, parse_hex_color};
@@ -38,6 +38,24 @@ pub struct Document {
     /// Font-family names referenced by [`Style::font`], indexed by
     /// [`FontId`]. Empty for frontends that do not read fonts.
     pub fonts: Vec<String>,
+    /// TULA FORK: review comments, in the order the document defines them.
+    /// Anchoring travels in the text as [`Inline::CommentMark`] markers.
+    pub comments: Vec<DocComment>,
+}
+
+/// TULA FORK: one review comment made on the document.
+#[derive(Debug, Clone)]
+pub struct DocComment {
+    /// The id the text's [`Inline::CommentMark`] markers carry.
+    pub id: String,
+    /// `w:author`.
+    pub author: Option<String>,
+    /// `w:initials`.
+    pub initials: Option<String>,
+    /// `w:date`, as the producer wrote it (ISO 8601 from Word).
+    pub date: Option<String>,
+    /// The comment's body.
+    pub blocks: Vec<Block>,
 }
 
 /// Footnote or endnote body, referenced from text by [`Inline::NoteRef`].

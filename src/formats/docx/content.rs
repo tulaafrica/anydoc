@@ -2,9 +2,9 @@
 
 use crate::error::ConvertError;
 use crate::formats::docx::numbering::{Counters, Numbering};
-use crate::formats::docx::styles::{FontTable, Styles, on_off, rpr_delta};
+use crate::formats::docx::styles::{FontTable, Styles, on_off, ppr_props, rpr_delta};
 use crate::model::{
-    Align, Block, Cell, GridBuilder, ImageSource, Inline, LinkTarget, ParaProps, Style, TableKind,
+    Block, Cell, CommentMarkKind, GridBuilder, ImageSource, Inline, LinkTarget, Style, TableKind,
     inlines_are_empty,
 };
 use crate::package::Package;
@@ -150,6 +150,22 @@ fn collect_blocks(
                 }
             }
             "customXml" => collect_blocks(child, ctx, blocks, list_run)?,
+            // TULA FORK: comment range markers are legal between paragraphs
+            // (EG_RangeMarkupElements). They ride a synthetic zero-width
+            // paragraph the IR emitter processes and skips.
+            "commentRangeStart" | "commentRangeEnd" => {
+                if let Some(id) = child.attr(ns::W, "id") {
+                    let kind = if child.local == "commentRangeStart" {
+                        CommentMarkKind::RangeStart
+                    } else {
+                        CommentMarkKind::RangeEnd
+                    };
+                    blocks.push(Block::Paragraph(vec![Inline::CommentMark {
+                        id: id.to_string(),
+                        kind,
+                    }]));
+                }
+            }
             _ => {}
         }
     }
@@ -194,38 +210,6 @@ fn emit_paragraph(
             }
         }
     }
-}
-
-/// TULA FORK: direct paragraph presentation (w:jc, w:ind, w:spacing) from a
-/// pPr. Style-chain paragraph properties are a documented follow-up; direct
-/// formatting is where the overwhelming majority of authored layout lives
-/// (a centred title is centred on the paragraph, not in a style).
-fn para_props(ppr: Option<&Element>) -> ParaProps {
-    let Some(ppr) = ppr else { return ParaProps::default() };
-    let mut props = ParaProps::default();
-    if let Some(jc) = ppr.find(ns::W, "jc").and_then(|e| e.attr(ns::W, "val")) {
-        props.align = Align::parse(jc);
-    }
-    if let Some(ind) = ppr.find(ns::W, "ind") {
-        let read = |names: &[&str]| {
-            names.iter().find_map(|n| ind.attr(ns::W, n)).and_then(|v| v.parse().ok())
-        };
-        props.indent_start = read(&["start", "left"]);
-        props.indent_end = read(&["end", "right"]);
-        props.indent_first_line = read(&["firstLine"]);
-        props.indent_hanging = read(&["hanging"]);
-    }
-    if let Some(spacing) = ppr.find(ns::W, "spacing") {
-        let read = |n: &str| spacing.attr(ns::W, n).and_then(|v| v.parse().ok());
-        props.spacing_before = read("before");
-        props.spacing_after = read("after");
-        // w:line is a straight multiple only under lineRule="auto"; exact and
-        // atLeast are absolute heights a flow renderer cannot honour.
-        if spacing.attr(ns::W, "lineRule").is_none_or(|r| r == "auto") {
-            props.line_240ths = read("line");
-        }
-    }
-    props
 }
 
 fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), ConvertError> {
@@ -284,7 +268,12 @@ fn parse_paragraph(p: &Element, ctx: &Ctx) -> Result<(ParaKind, Vec<Piece>), Con
     // item's indentation comes from its nesting level, and applying w:ind on
     // top would double-indent — same rule as the reference converter).
     if !matches!(kind, ParaKind::ListItem { .. }) {
-        let props = para_props(ppr);
+        // Style-chain layer (pStyle -> basedOn -> ... -> docDefaults) under
+        // the direct pPr: a template's justified body or centred title style
+        // shows up here, not on the paragraph itself.
+        let chain = ctx.styles.para_props_for(pstyle_id)?;
+        let direct = ppr.map(ppr_props).unwrap_or_default();
+        let props = crate::formats::docx::styles::merge_para(chain, direct);
         if !props.is_empty() {
             let marker = Inline::ParaPres(Box::new(props));
             match pieces.iter_mut().find_map(|piece| match piece {
@@ -428,6 +417,16 @@ impl<'a, 'b, 'e> InlineWalker<'a, 'b, 'e> {
                     self.push_field_result(&instr, content);
                     self.push_blocks(attachments);
                 }
+                "commentRangeStart" | "commentRangeEnd" => {
+                    if let Some(id) = child.attr(ns::W, "id") {
+                        let kind = if child.local == "commentRangeStart" {
+                            CommentMarkKind::RangeStart
+                        } else {
+                            CommentMarkKind::RangeEnd
+                        };
+                        self.push(Inline::CommentMark { id: id.to_string(), kind });
+                    }
+                }
                 "bookmarkStart" => {
                     if let Some(name) = child.attr(ns::W, "name")
                         && name != "_GoBack"
@@ -523,6 +522,14 @@ impl<'a, 'b, 'e> InlineWalker<'a, 'b, 'e> {
                     }
                 }
                 "cr" => self.push(Inline::LineBreak),
+                "commentReference" => {
+                    if let Some(id) = child.attr(ns::W, "id") {
+                        self.push(Inline::CommentMark {
+                            id: id.to_string(),
+                            kind: CommentMarkKind::Reference,
+                        });
+                    }
+                }
                 "footnoteReference" => {
                     if let Some(id) = child.attr(ns::W, "id") {
                         self.push(Inline::NoteRef(format!("fn{id}")));

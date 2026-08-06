@@ -122,8 +122,40 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
         }
     }
 
+    // TULA FORK: review comments, body-parsed with the same ctx pattern as
+    // the notes parts so images and styling inside a comment resolve.
+    let mut comments = Vec::new();
+    let comments_part =
+        typed_part_path(&ctx.rels, &ctx.base_part, rel_type::COMMENTS, "comments.xml");
+    // The tree binds BEFORE the `if let`, so the package borrow is not held
+    // across a body that borrows again (same trap the notes loader documents).
+    let comments_tree = pkg.borrow_mut().optional_xml_part(&comments_part)?;
+    if let Some(tree) = comments_tree {
+        if let Some(root) = tree.find(ns::W, "comments") {
+            let comment_rels = read_rels(&mut pkg.borrow_mut(), &rels_part_for(&comments_part))?;
+            let comment_ctx = ctx.for_part(comment_rels, comments_part.clone());
+            for comment in root.find_all(ns::W, "comment") {
+                let Some(id) = comment.attr(ns::W, "id") else { continue };
+                let attr = |name: &str| {
+                    comment
+                        .attr(ns::W, name)
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(String::from)
+                };
+                comments.push(crate::model::DocComment {
+                    id: id.to_string(),
+                    author: attr("author"),
+                    initials: attr("initials"),
+                    date: attr("date"),
+                    blocks: content::parse_blocks(comment, &comment_ctx)?,
+                });
+            }
+        }
+    }
+
     let assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(Document { blocks, notes, assets, fonts: fonts.into_names() })
+    Ok(Document { blocks, notes, assets, fonts: fonts.into_names(), comments })
 }
 
 /// Path of a typed related part, resolved against the main part; falls back

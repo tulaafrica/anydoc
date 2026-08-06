@@ -37,6 +37,27 @@ pub enum Inline {
     /// Carries what `Block::Paragraph`'s tuple shape cannot: alignment,
     /// indents, spacing. Markdown renders it as nothing.
     ParaPres(Box<ParaProps>),
+    /// TULA FORK: zero-width comment-anchoring marker: the boundaries of the
+    /// span a comment covers, or its point reference mark. Markdown renders
+    /// it as nothing; an IR consumer stamps covered runs from it.
+    CommentMark {
+        /// The id of the [`DocComment`](crate::model::DocComment) this marks.
+        id: String,
+        /// Which boundary this is.
+        kind: CommentMarkKind,
+    },
+}
+
+/// TULA FORK: what a [`Inline::CommentMark`] marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentMarkKind {
+    /// `w:commentRangeStart`.
+    RangeStart,
+    /// `w:commentRangeEnd`.
+    RangeEnd,
+    /// `w:commentReference` - the mark at the END of the commented span; a
+    /// comment with no range anchors at this point.
+    Reference,
 }
 
 impl Inline {
@@ -61,7 +82,10 @@ fn collect_plain_text(inlines: &[Inline], out: &mut String) {
             Inline::Text { text, .. } => out.push_str(text),
             Inline::Link { content, .. } => collect_plain_text(content, out),
             Inline::Image { alt, .. } => out.push_str(alt),
-            Inline::Anchor(_) | Inline::NoteRef(_) | Inline::ParaPres(_) => {}
+            Inline::Anchor(_)
+            | Inline::NoteRef(_)
+            | Inline::ParaPres(_)
+            | Inline::CommentMark { .. } => {}
             Inline::LineBreak => out.push('\n'),
         }
     }
@@ -75,6 +99,9 @@ pub fn inlines_are_empty(inlines: &[Inline]) -> bool {
         Inline::Text { text, .. } => text.trim().is_empty(),
         Inline::Link { content, target } => target.is_empty() && inlines_are_empty(content),
         Inline::Image { .. } | Inline::NoteRef(_) => false,
-        Inline::Anchor(_) | Inline::LineBreak | Inline::ParaPres(_) => true,
+        Inline::Anchor(_)
+        | Inline::LineBreak
+        | Inline::ParaPres(_)
+        | Inline::CommentMark { .. } => true,
     })
 }
