@@ -75,7 +75,7 @@ apply from: '../nitrogen/generated/android/RNAnydoc+autolinking.gradle'
 // so they ship as a GitHub Release asset and are fetched on first build.
 // Building from source instead (`yarn build:rust`, needs the Rust
 // toolchain) drops the same files in libs/ and this task self-skips.
-def anydocLibsVersion = "0.1.0"
+def anydocLibsVersion = "0.1.1"
 def anydocLibsUrl = project.hasProperty("anydocLibsUrl")
   ? project.property("anydocLibsUrl").toString()
   : "https://github.com/tulaafrica/anydoc/releases/download/rn-v${anydocLibsVersion}/anydoc-android-libs-${anydocLibsVersion}.zip"
