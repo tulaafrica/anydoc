@@ -70,7 +70,11 @@ fn is_encrypted(pkg: &RefCell<Package>) -> Result<bool, ConvertError> {
 
 fn parse_presentation(pres: &Element, ctx: &Ctx) -> Result<Vec<Block>, ConvertError> {
     let mut blocks = Vec::new();
-    for page in pres.find_all(ns::DRAW, "page") {
+    for (index, page) in pres.find_all(ns::DRAW, "page").enumerate() {
+        // TULA FORK: every slide opens with a `slide-N` anchor, the same
+        // page-boundary contract pptx emits. Unreferenced anchors render
+        // nothing in Markdown, so upstream output is unchanged.
+        blocks.push(Block::Paragraph(vec![Inline::Anchor(format!("slide-{}", index + 1))]));
         let mut title = Vec::new();
         let mut body = Vec::new();
         let mut notes = Vec::new();

@@ -348,7 +348,10 @@ impl Extractor {
         // slides), which order-based zipping would misattribute.
         let mut used = vec![false; notes.len()];
         let mut out = Vec::new();
-        for (sid, blocks) in slides {
+        for (index, (sid, blocks)) in slides.into_iter().enumerate() {
+            // TULA FORK: the `slide-N` page-boundary anchor, as in pptx/odp.
+            // Unreferenced anchors render nothing in Markdown.
+            out.push(Block::Paragraph(vec![Inline::Anchor(format!("slide-{}", index + 1))]));
             out.extend(blocks);
             for (i, (nid, nblocks)) in notes.iter_mut().enumerate() {
                 if !used[i] && sid.is_some() && *nid == sid {

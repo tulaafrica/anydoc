@@ -9,7 +9,9 @@
 //!
 //! Output buffer layout (one allocation, one bridge crossing):
 //!
-//!     [4 bytes LE: json length][json UTF-8][asset bytes, concatenated]
+//! ```text
+//! [4 bytes LE: json length][json UTF-8][asset bytes, concatenated]
+//! ```
 //!
 //! The JSON's `assets` array carries each asset's offset/length into the
 //! trailing blob, so the JS side slices ArrayBuffers without copying.

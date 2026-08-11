@@ -658,7 +658,8 @@ fn sep(out: &mut String, first: &mut bool) {
     *first = false;
 }
 
-/// Is this paragraph a pptx slide boundary - a single `slide-N` anchor?
+/// Is this paragraph a slide boundary - a single `slide-N` anchor?
+/// (pptx, legacy ppt and odp all emit one per slide.)
 fn slide_anchor(block: &Block) -> bool {
     let Block::Paragraph(inlines) = block else { return false };
     let [Inline::Anchor(id)] = inlines.as_slice() else { return false };
@@ -666,21 +667,45 @@ fn slide_anchor(block: &Block) -> bool {
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// In a spreadsheet document, a level-2 heading is BY CONSTRUCTION a sheet
+/// name - the sheet converter emits nothing else at that level (cells become
+/// table content, never headings). Returns the sheet's name.
+fn sheet_heading(block: &Block) -> Option<String> {
+    let Block::Heading { level: 2, content, .. } = block else { return None };
+    let [Inline::Text { text, .. }] = content.as_slice() else { return None };
+    Some(text.clone())
+}
+
 /// The whole document as IR v2 JSON plus the referenced asset bytes.
 ///
-/// pptx slide anchors become PAGE boundaries: the IR's page list is the one
-/// place the renderer already knows how to paginate.
+/// Boundary markers become PAGE boundaries - the IR's page list is the one
+/// place the renderer already knows how to paginate:
+///   - slide anchors (pptx/ppt/odp): one page per slide, unnamed (the app
+///     labels them "Slide N" in the user's language);
+///   - sheet-name headings (xlsx/ods): one page per sheet, NAMED - the tab
+///     carries the name, so the heading block itself is consumed.
 pub fn document_to_ir<'a>(doc: &'a Document, source_type: &str) -> IrOutput<'a> {
-    // Split blocks into pages at slide anchors.
-    let mut pages: Vec<Vec<&Block>> = vec![Vec::new()];
+    let is_sheet = matches!(source_type, "xlsx" | "ods" | "csv");
+    let mut pages: Vec<(Option<String>, Vec<&Block>)> = vec![(None, Vec::new())];
     for block in &doc.blocks {
         if slide_anchor(block) {
-            if !pages.last().unwrap().is_empty() {
-                pages.push(Vec::new());
+            if !pages.last().unwrap().1.is_empty() {
+                pages.push((None, Vec::new()));
             }
             continue;
         }
-        pages.last_mut().unwrap().push(block);
+        if is_sheet && let Some(name) = sheet_heading(block) {
+            // The first sheet's heading names the initial (still empty)
+            // page; every later one starts the next page.
+            let last = pages.last_mut().unwrap();
+            if last.1.is_empty() && last.0.is_none() {
+                last.0 = Some(name);
+            } else {
+                pages.push((Some(name), Vec::new()));
+            }
+            continue;
+        }
+        pages.last_mut().unwrap().1.push(block);
     }
 
     let mut emitter = Emitter {
@@ -694,11 +719,16 @@ pub fn document_to_ir<'a>(doc: &'a Document, source_type: &str) -> IrOutput<'a> 
     json.push_str("{\"status\":\"ok\",\"ir\":{\"version\":2,");
     str_field(&mut json, "sourceType", source_type);
     json.push_str(",\"pages\":[");
-    for (pi, page) in pages.iter().enumerate() {
+    for (pi, (name, page)) in pages.iter().enumerate() {
         if pi > 0 {
             json.push(',');
         }
-        json.push_str(&format!("{{\"pageIndex\":{pi},\"blocks\":["));
+        json.push_str(&format!("{{\"pageIndex\":{pi},"));
+        if let Some(name) = name {
+            str_field(&mut json, "name", name);
+            json.push(',');
+        }
+        json.push_str("\"blocks\":[");
         let mut first = true;
         for block in page {
             emitter.write_block(block, &mut json, &mut first);
