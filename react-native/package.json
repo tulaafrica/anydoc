@@ -1,6 +1,6 @@
 {
   "name": "react-native-anydoc",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Any office document (docx, doc, pptx, xlsx, odt, rtf, epub…) to a structured DocumentIR, converted natively in Rust, off the JS thread",
   "main": "src/index.ts",
   "license": "MIT",
