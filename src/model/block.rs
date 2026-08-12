@@ -1,4 +1,4 @@
-use crate::model::{AnchorId, Inline, List, Table};
+use crate::model::{AnchorId, Chart, Inline, List, Table};
 
 /// One block-level piece of a document body.
 #[derive(Debug, Clone)]
@@ -33,6 +33,10 @@ pub enum Block {
     },
     /// A horizontal rule.
     Rule,
+    /// A chart with its cached data in typed form. Text renderers fall back
+    /// to [`Chart::fallback_blocks`] (bold title + data table); renderers
+    /// that can draw get the numbers.
+    Chart(Chart),
 }
 
 impl Block {

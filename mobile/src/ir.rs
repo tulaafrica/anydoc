@@ -491,6 +491,60 @@ impl<'a> Emitter<'a> {
                 sep(out, first);
                 out.push_str("{\"type\":\"paragraph\",\"runs\":[]}");
             }
+            Block::Chart(chart) => {
+                // The typed chart block, followed by nothing else: a renderer
+                // that can draw uses kind + numeric series; one that cannot
+                // rebuilds the titled data table from categories x labels.
+                sep(out, first);
+                out.push_str("{\"type\":\"chart\",");
+                str_field(out, "kind", chart.kind.as_str());
+                if let Some(title) = &chart.title {
+                    out.push(',');
+                    str_field(out, "title", title);
+                }
+                if !chart.axis_title.is_empty() {
+                    out.push(',');
+                    str_field(out, "axisTitle", &chart.axis_title);
+                }
+                out.push_str(",\"categories\":[");
+                for (i, cat) in chart.categories.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push('"');
+                    esc(cat, out);
+                    out.push('"');
+                }
+                out.push_str("],\"series\":[");
+                for (si, s) in chart.series.iter().enumerate() {
+                    if si > 0 {
+                        out.push(',');
+                    }
+                    out.push('{');
+                    str_field(out, "name", &s.name);
+                    out.push_str(",\"values\":[");
+                    for (i, v) in s.values.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        match v {
+                            Some(n) if n.is_finite() => out.push_str(&n.to_string()),
+                            _ => out.push_str("null"),
+                        }
+                    }
+                    out.push_str("],\"labels\":[");
+                    for (i, l) in s.labels.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push('"');
+                        esc(l, out);
+                        out.push('"');
+                    }
+                    out.push_str("]}");
+                }
+                out.push_str("]}");
+            }
         }
     }
 

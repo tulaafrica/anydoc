@@ -171,5 +171,12 @@ fn cell_block_text(block: &Block, rc: &Ctx, parts: &mut Vec<String>) {
             }
         }
         Block::Rule => {}
+        // A chart nested in a table cell flattens the same way its fallback
+        // blocks (bold title + data table) always did.
+        Block::Chart(c) => {
+            for b in &c.fallback_blocks() {
+                cell_block_text(b, rc, parts);
+            }
+        }
     }
 }

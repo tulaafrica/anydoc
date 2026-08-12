@@ -390,19 +390,32 @@ mod tests {
     #[test]
     fn charts_render_as_titled_tables_after_their_sheet() {
         let doc = parse(&xlsx_with_chart()).unwrap();
-        // Single sheet: cells table, then the chart's bold title, then its
-        // categories x series table.
+        // Single sheet: cells table, then one typed chart block whose
+        // fallback is the bold title + categories x series table.
         assert!(matches!(doc.blocks.first(), Some(Block::Table(_))), "sheet cells first");
-        let Some(Block::Paragraph(inlines)) = doc.blocks.get(1) else {
-            panic!("expected the chart title, got {:?}", doc.blocks.get(1));
+        let Some(Block::Chart(chart)) = doc.blocks.get(1) else {
+            panic!("expected a chart block, got {:?}", doc.blocks.get(1));
+        };
+        assert_eq!(chart.kind, crate::model::ChartKind::Bar);
+        assert_eq!(chart.title.as_deref(), Some("Monthly Sales"));
+        assert_eq!(chart.categories, vec!["Jan"]);
+        assert_eq!(chart.series.len(), 1);
+        assert_eq!(chart.series[0].name, "Sales");
+        assert_eq!(chart.series[0].values, vec![Some(10.0)]);
+        assert_eq!(doc.blocks.len(), 2);
+
+        // The fallback keeps the historical text shape.
+        let fallback = chart.fallback_blocks();
+        let Some(Block::Paragraph(inlines)) = fallback.first() else {
+            panic!("expected the chart title, got {:?}", fallback.first());
         };
         let Some(Inline::Text { text, style }) = inlines.first() else {
             panic!("expected title text");
         };
         assert_eq!(text, "Monthly Sales");
         assert!(style.bold);
-        assert!(matches!(doc.blocks.get(2), Some(Block::Table(_))), "chart data table last");
-        assert_eq!(doc.blocks.len(), 3);
+        assert!(matches!(fallback.get(1), Some(Block::Table(_))), "chart data table last");
+        assert_eq!(fallback.len(), 2);
     }
 
     fn covered_count(doc: &Document) -> usize {

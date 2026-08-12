@@ -2,30 +2,21 @@
 //! charts (title, axis titles, cached series data) and SmartArt diagram
 //! data (text points).
 
-use crate::model::{Block, Cell, Inline, List, ListItem, Style, Table, TableKind};
+use crate::model::{Block, Chart, ChartKind, ChartSeries, Inline, List, ListItem};
 use crate::package::xml::{Element, ns};
 use crate::shared::text::clean_text;
 
-/// A chart part as blocks: bold title paragraph plus a categories x series
-/// table built from the cached display strings.
+/// A chart part as a single [`Block::Chart`] carrying the cached data in
+/// typed form. Markdown renders it through [`Chart::fallback_blocks`] (bold
+/// title paragraph plus a categories x series table), so text output is
+/// unchanged; drawing renderers get kind, categories and numeric series.
 pub fn chart_blocks(root: &Element) -> Vec<Block> {
-    let mut blocks = Vec::new();
     let title = root
         .first_descendant(ns::CHART, "title")
         .map(|t| clean_text(&drawing_text(t)))
         .filter(|t| !t.trim().is_empty());
-    if let Some(title) = title {
-        blocks.push(Block::Paragraph(vec![Inline::Text {
-            text: title,
-            style: Style { bold: true, ..Style::PLAIN },
-        }]));
-    }
-    struct Series {
-        name: String,
-        values: Vec<String>,
-    }
     let mut categories: Vec<String> = Vec::new();
-    let mut series: Vec<Series> = Vec::new();
+    let mut series: Vec<ChartSeries> = Vec::new();
     for ser in root.descendants(ns::CHART, "ser") {
         // Cached display strings only; `c:f` formula references are not text.
         let name = ser
@@ -40,33 +31,44 @@ pub fn chart_blocks(root: &Element) -> Vec<Block> {
         if categories.is_empty() {
             categories = cats;
         }
-        let values: Vec<String> = ser
+        let labels: Vec<String> = ser
             .find(ns::CHART, "val")
             .map(|v| v.descendants(ns::CHART, "v").map(|p| clean_text(&p.text())).collect())
             .unwrap_or_default();
-        series.push(Series { name, values });
+        let values = labels.iter().map(|l| l.trim().parse::<f64>().ok()).collect();
+        series.push(ChartSeries { name, labels, values });
     }
-    if !series.is_empty() && !categories.is_empty() {
-        let cat_title = root
-            .first_descendant(ns::CHART, "catAx")
-            .and_then(|ax| ax.find(ns::CHART, "title"))
-            .map(|t| clean_text(&drawing_text(t)))
-            .unwrap_or_default();
-        let mut header: Vec<Cell> = vec![Cell::from_inlines(vec![Inline::plain(cat_title)])];
-        header
-            .extend(series.iter().map(|s| Cell::from_inlines(vec![Inline::plain(s.name.clone())])));
-        let mut rows = vec![header];
-        for (i, cat) in categories.iter().enumerate() {
-            let mut row = vec![Cell::from_inlines(vec![Inline::plain(cat.clone())])];
-            for s in &series {
-                let v = s.values.get(i).cloned().unwrap_or_default();
-                row.push(Cell::from_inlines(vec![Inline::plain(v)]));
-            }
-            rows.push(row);
-        }
-        blocks.push(Block::Table(Table::from_rows(rows, 1, TableKind::Data)));
+    let axis_title = root
+        .first_descendant(ns::CHART, "catAx")
+        .and_then(|ax| ax.find(ns::CHART, "title"))
+        .map(|t| clean_text(&drawing_text(t)))
+        .unwrap_or_default();
+    let chart = Chart { kind: chart_kind(root), title, axis_title, categories, series };
+    if chart.is_empty() { Vec::new() } else { vec![Block::Chart(chart)] }
+}
+
+/// The plot kind, read from the first recognized plot element in the plot
+/// area. A combo chart reports its first plot; 3-D variants collapse onto
+/// their flat kind.
+fn chart_kind(root: &Element) -> ChartKind {
+    let Some(plot_area) = root.first_descendant(ns::CHART, "plotArea") else {
+        return ChartKind::Other;
+    };
+    for child in plot_area.child_elems() {
+        let kind = match child.local.as_str() {
+            "barChart" | "bar3DChart" => ChartKind::Bar,
+            "lineChart" | "line3DChart" | "stockChart" => ChartKind::Line,
+            "areaChart" | "area3DChart" => ChartKind::Area,
+            "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
+            "doughnutChart" => ChartKind::Doughnut,
+            "scatterChart" | "bubbleChart" => ChartKind::Scatter,
+            "radarChart" => ChartKind::Radar,
+            "surface3DChart" | "surfaceChart" => ChartKind::Other,
+            _ => continue,
+        };
+        return kind;
     }
-    blocks
+    ChartKind::Other
 }
 
 /// A SmartArt data part as a bullet list of its text points in order.

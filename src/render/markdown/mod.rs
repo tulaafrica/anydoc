@@ -147,7 +147,8 @@ fn collect_note_refs(
                 }
             }
             Block::BlockQuote(blocks) => collect_note_refs(blocks, valid, order, seen),
-            Block::CodeBlock { .. } | Block::Rule => {}
+            // A chart's fallback blocks are built from plain text only.
+            Block::CodeBlock { .. } | Block::Rule | Block::Chart(_) => {}
         }
     }
 }
@@ -199,6 +200,13 @@ fn render_block(block: &Block, rc: &Ctx) -> Option<String> {
             Some(format!("{fence}{lang}\n{body}\n{fence}"))
         }
         Block::Rule => Some("---".to_string()),
+        // Rendered via the fallback blocks (bold title + data table), joined
+        // exactly as two sibling blocks would be - text output is unchanged
+        // from when charts arrived as a Paragraph + Table pair.
+        Block::Chart(chart) => {
+            let inner = render_blocks(&chart.fallback_blocks(), rc);
+            if inner.is_empty() { None } else { Some(inner) }
+        }
     }
 }
 

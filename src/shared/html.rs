@@ -704,6 +704,9 @@ fn block_text(block: &Block) -> String {
             .join(" "),
         Block::BlockQuote(blocks) => blocks.iter().map(block_text).collect::<Vec<_>>().join(" "),
         Block::CodeBlock { text, .. } => text.clone(),
+        Block::Chart(c) => {
+            c.fallback_blocks().iter().map(block_text).collect::<Vec<_>>().join(" ")
+        }
         Block::Table(table) => table
             .grid
             .iter()

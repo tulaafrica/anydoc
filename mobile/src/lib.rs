@@ -201,4 +201,33 @@ mod tests {
         let (json, _) = convert(b"PK\x03\x04justkidding");
         assert!(json.contains("\"status\":\"fallback\""), "got: {json}");
     }
+
+    #[test]
+    fn chart_blocks_emit_typed_chart_json() {
+        use anydoc::model::{Block, Chart, ChartKind, ChartSeries, Document};
+        let doc = Document {
+            blocks: vec![Block::Chart(Chart {
+                kind: ChartKind::Pie,
+                title: Some("Share".to_string()),
+                axis_title: String::new(),
+                categories: vec!["A".to_string(), "B".to_string()],
+                series: vec![ChartSeries {
+                    name: "S1".to_string(),
+                    labels: vec!["1".to_string(), "2.5".to_string()],
+                    values: vec![Some(1.0), Some(2.5)],
+                }],
+            })],
+            ..Default::default()
+        };
+        let out = crate::ir::document_to_ir(&doc, "xlsx");
+        assert!(
+            out.json.contains(
+                "{\"type\":\"chart\",\"kind\":\"pie\",\"title\":\"Share\",\
+                 \"categories\":[\"A\",\"B\"],\
+                 \"series\":[{\"name\":\"S1\",\"values\":[1,2.5],\"labels\":[\"1\",\"2.5\"]}]}"
+            ),
+            "got: {}",
+            out.json
+        );
+    }
 }
