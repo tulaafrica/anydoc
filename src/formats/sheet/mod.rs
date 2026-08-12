@@ -2,6 +2,9 @@
 
 use crate::error::ConvertError;
 use crate::model::{Block, Cell, Document, GridBuilder, Inline, TableKind};
+use crate::package::relationships::{read_rels, rel_type, rels_part_for};
+use crate::package::xml::ns;
+use crate::package::{Package, path};
 use crate::shared::header::resolve_header_rows;
 use crate::shared::text::clean_text;
 use calamine::{Data, Dimensions, Reader, Sheets, open_workbook_auto_from_rs};
@@ -27,6 +30,10 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     let sheet_names = contained("sheet listing", || workbook.sheet_names().to_owned())?;
     let multi_sheet = sheet_names.len() > 1;
     let merged = merged_regions(&mut workbook, &sheet_names)?;
+    // TULA FORK: charts, rendered as titled data tables (the docx/pptx
+    // treatment) after their sheet's cells. xlsx-only; every failure inside
+    // degrades to "no charts", never to a failed conversion.
+    let mut charts = workbook_charts(bytes);
 
     let mut doc = Document::default();
     let mut failed = 0usize;
@@ -34,12 +41,18 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
         let range = match contained("worksheet read", || workbook.worksheet_range(name))? {
             Ok(r) => r,
             Err(e) => {
+                // A dedicated CHART SHEET has no cell range at all - its
+                // charts are the whole point, so they still render.
+                if push_sheet_charts(&mut doc, &mut charts, name, multi_sheet) {
+                    continue;
+                }
                 log::warn!("skipping unreadable sheet {name:?}: {e}");
                 failed += 1;
                 continue;
             }
         };
         if range.is_empty() {
+            push_sheet_charts(&mut doc, &mut charts, name, multi_sheet);
             continue;
         }
         // Merged regions in range-relative coordinates: the top-left cell
@@ -109,11 +122,90 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
             doc.blocks.push(Block::heading(2, vec![Inline::plain(name.clone())]));
         }
         doc.blocks.push(Block::Table(table));
+        if let Some(chart_blocks) = charts.remove(name.as_str()) {
+            doc.blocks.extend(chart_blocks);
+        }
     }
     if !sheet_names.is_empty() && failed == sheet_names.len() {
         return Err(ConvertError::malformed("no sheet in the workbook could be read"));
     }
     Ok(doc)
+}
+
+/// Append a sheet's charts (with its heading, if none was emitted for cells).
+/// Returns whether anything was rendered for the sheet.
+fn push_sheet_charts(
+    doc: &mut Document,
+    charts: &mut HashMap<String, Vec<Block>>,
+    name: &str,
+    multi_sheet: bool,
+) -> bool {
+    let Some(chart_blocks) = charts.remove(name) else { return false };
+    if multi_sheet {
+        doc.blocks.push(Block::heading(2, vec![Inline::plain(name.to_string())]));
+    }
+    doc.blocks.extend(chart_blocks);
+    true
+}
+
+/// TULA FORK: every chart in the workbook, as blocks, keyed by the OWNING
+/// sheet's name: workbook part -> sheet r:id -> worksheet/chartsheet part ->
+/// drawing part -> chart parts, each rendered by the same
+/// `shared::drawingml::chart_blocks` that docx and pptx use. Only xlsx has
+/// these parts; on anything else (`Package::open` fails on xls/ods-without-
+/// workbook) the map is empty and the caller renders cells alone.
+fn workbook_charts(bytes: &[u8]) -> HashMap<String, Vec<Block>> {
+    let mut out = HashMap::new();
+    let Ok(mut pkg) = Package::open(bytes) else { return out };
+    let Ok(root_rels) = read_rels(&mut pkg, "_rels/.rels") else { return out };
+    let workbook_part = root_rels
+        .first_of_type(rel_type::OFFICE_DOCUMENT)
+        .and_then(|rel| path::resolve("", &rel.target).ok())
+        .map(|t| t.path)
+        .unwrap_or_else(|| "xl/workbook.xml".to_string());
+    let Ok(Some(workbook)) = pkg.optional_xml_part(&workbook_part) else { return out };
+    let Ok(workbook_rels) = read_rels(&mut pkg, &rels_part_for(&workbook_part)) else {
+        return out;
+    };
+
+    for sheet in workbook.descendants_any("sheet") {
+        let Some(name) = sheet.attr_any("name") else { continue };
+        let Some(rel_id) = sheet.attr_qualified(ns::R, "id") else { continue };
+        let Some(target) = workbook_rels.internal_target(rel_id) else { continue };
+        let Ok(sheet_part) = path::resolve(&workbook_part, target) else { continue };
+        let blocks = sheet_chart_blocks(&mut pkg, &sheet_part.path);
+        if !blocks.is_empty() {
+            out.insert(name.to_string(), blocks);
+        }
+    }
+    out
+}
+
+/// The charts anchored on one sheet, in the drawing's document order.
+fn sheet_chart_blocks(pkg: &mut Package, sheet_part: &str) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let Ok(sheet_rels) = read_rels(pkg, &rels_part_for(sheet_part)) else { return blocks };
+    let drawing_parts: Vec<String> = sheet_rels
+        .iter()
+        .filter(|(_, rel)| rel.rel_type.ends_with("/drawing"))
+        .filter_map(|(_, rel)| path::resolve(sheet_part, &rel.target).ok().map(|t| t.path))
+        .collect();
+
+    for drawing_part in drawing_parts {
+        let Ok(Some(drawing)) = pkg.optional_xml_part(&drawing_part) else { continue };
+        let Ok(drawing_rels) = read_rels(pkg, &rels_part_for(&drawing_part)) else { continue };
+        // Document order of the DRAWING decides chart order, not rels-map order.
+        for chart_ref in drawing.descendants(ns::CHART, "chart") {
+            let Some(rel_id) = chart_ref.attr_qualified(ns::R, "id") else { continue };
+            let Some(target) = drawing_rels.internal_target(rel_id) else { continue };
+            let Ok(chart_part) = path::resolve(&drawing_part, target) else { continue };
+            match pkg.optional_xml_part(&chart_part.path) {
+                Ok(Some(root)) => blocks.extend(crate::shared::drawingml::chart_blocks(&root)),
+                _ => log::warn!("skipping unreadable chart part {}", chart_part.path),
+            }
+        }
+    }
+    blocks
 }
 
 /// Merged regions per sheet, where the container format exposes them (xlsx
@@ -242,6 +334,75 @@ mod tests {
         w.start_file("xl/worksheets/sheet1.xml", zip::write::SimpleFileOptions::default()).unwrap();
         w.write_all(sheet.as_bytes()).unwrap();
         w.finish().unwrap().into_inner()
+    }
+
+
+    /// Minimal xlsx whose one worksheet anchors one chart (title + a cached
+    /// series). Exercises the whole chain: workbook -> sheet rels -> drawing
+    /// -> chart part -> chart_blocks.
+    fn xlsx_with_chart() -> Vec<u8> {
+        let parts: &[(&str, &str)] = &[
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Revenue" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Month</t></is></c><c r="B1" t="inlineStr"><is><t>Sales</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Jan</t></is></c><c r="B2"><v>10</v></c></row></sheetData><drawing r:id="rId2"/></worksheet>"#,
+            ),
+            (
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/drawings/drawing1.xml",
+                r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:graphicFrame><c:chart r:id="rId1"/></xdr:graphicFrame></xdr:oneCellAnchor></xdr:wsDr>"#,
+            ),
+            (
+                "xl/drawings/_rels/drawing1.xml.rels",
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/charts/chart1.xml",
+                r#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Monthly Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:tx><c:strRef><c:f>Revenue!$B$1</c:f><c:strCache><c:pt idx="0"><c:v>Sales</c:v></c:pt></c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:f>Revenue!$A$2</c:f><c:strCache><c:pt idx="0"><c:v>Jan</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>Revenue!$B$2</c:f><c:numCache><c:pt idx="0"><c:v>10</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+            ),
+        ];
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in parts {
+            w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(body.as_bytes()).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn charts_render_as_titled_tables_after_their_sheet() {
+        let doc = parse(&xlsx_with_chart()).unwrap();
+        // Single sheet: cells table, then the chart's bold title, then its
+        // categories x series table.
+        assert!(matches!(doc.blocks.first(), Some(Block::Table(_))), "sheet cells first");
+        let Some(Block::Paragraph(inlines)) = doc.blocks.get(1) else {
+            panic!("expected the chart title, got {:?}", doc.blocks.get(1));
+        };
+        let Some(Inline::Text { text, style }) = inlines.first() else {
+            panic!("expected title text");
+        };
+        assert_eq!(text, "Monthly Sales");
+        assert!(style.bold);
+        assert!(matches!(doc.blocks.get(2), Some(Block::Table(_))), "chart data table last");
+        assert_eq!(doc.blocks.len(), 3);
     }
 
     fn covered_count(doc: &Document) -> usize {

@@ -138,6 +138,10 @@ The shape in detail:
   multi-sheet `.xlsx`/`.ods` as one **named** page per sheet (the name is
   the sheet's tab). Word formats emit a single page (Word stores no page
   breaks — they are computed at layout time).
+- **Charts** (`.xlsx`, and embedded charts in `.docx`/`.pptx`) render as a
+  bold title plus a categories × series data table built from the chart's
+  cached values, placed after the owning sheet's cells — dedicated chart
+  sheets included.
 - **Runs** carry the formatting: `bold`, `italic`, `underline`,
   `strikethrough`, `fontFamily`, `fontSize` (px), `color` (`#RRGGBB`),
   `highlightColor` (Word's 16-name enum), `verticalAlign`, `caps`, and
