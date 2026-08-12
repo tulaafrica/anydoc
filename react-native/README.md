@@ -14,15 +14,30 @@ with [Nitro Modules](https://nitro.margelo.com).
 
 Born inside [Tula](https://github.com/tulaafrica), an end-to-end encrypted
 chat app, where documents must be converted on the sender's device because
-no server ever holds plaintext. Measured on a Galaxy A05s (a $120 phone): a
-949kB, 130-page thesis with 72 comments and 16 images converts end-to-end
-in **~226ms** — about 30× the JS-based converter it replaced. A 16MB report
-takes ~520ms.
+no server ever holds plaintext.
 
-> **Status: Android, 0.x.** iOS bindings (`nitrogen/generated/ios` + Nitro
-> podspec) exist but are not yet built or verified — iOS support is next.
-> Upstream anydoc moves fast and we aim to track it; the fork keeps its
-> Markdown output byte-identical to upstream so merges stay routine.
+## Performance
+
+Real documents, real phones, measured end-to-end **inside a running app**
+(JS call → Nitro thread pool → Rust → result parsed back in JS). Not
+microbenchmarks.
+
+| Document | Size | Galaxy A05s (~$120) | iPhone 16 Pro |
+|---|---|---|---|
+| 130-page thesis, 72 comments, 16 images (.docx) | 949 kB | 226 ms | 43 ms |
+| Architecture doc, 27 tables (.docx) | 37 kB | 47 ms | 15 ms |
+| Slide deck, 8 slides (.pptx) | 200 kB | 17 ms | 3 ms |
+| Legacy Word 97 file (.doc) | 64 kB | 4 ms | <1 ms |
+| 9-sheet workbook (.xlsx) | 49 kB | ~30 ms | 7 ms |
+| 16 MB report (.docx) | 16 MB | ~520 ms | — |
+| 100 kB of random bytes | 100 kB | clean fallback | clean fallback |
+
+Android numbers are from a dev-mode Hermes build on a Samsung Galaxy A05s
+(the low-end reference device — measured there deliberately); iPhone
+numbers are from a Release build on an iPhone 16 Pro. The JS converter
+this replaced took **6.9 seconds** for the thesis on the same A05s; over a
+30-document corpus the Rust core was ~29× faster overall, with text output
+hash-identical on every Word-produced document.
 
 ## Install
 
@@ -30,17 +45,27 @@ takes ~520ms.
 npm install react-native-anydoc react-native-nitro-modules
 ```
 
-Autolinking does the rest. On first Android build, gradle downloads the
-prebuilt Rust core (~80MB zip) from this repo's GitHub Releases; to build
-it from source instead (Rust + Android NDK required):
+Autolinking handles registration on both platforms. The prebuilt Rust core
+is too large for the npm tarball, so it ships as GitHub Release assets:
 
-```sh
-npx nitrogen                                # if you touched src/specs/
-./node_modules/react-native-anydoc/scripts/build-rust.sh
-```
+- **Android** — nothing to do: on first build, gradle downloads the static
+  libraries (`arm64-v8a`, `armeabi-v7a`, `x86_64`) from this repo's
+  Releases automatically. Override the source with
+  `-PanydocLibsUrl=<url>`, or build from source (Rust + Android NDK):
 
-ABIs: `arm64-v8a`, `armeabi-v7a`, `x86_64`. (32-bit x86 emulators get no
-native slice — handle the rejection as shown below.)
+  ```sh
+  ./node_modules/react-native-anydoc/scripts/build-rust.sh
+  ```
+
+- **iOS** — download `AnydocCore.xcframework.zip` from the
+  [matching release](https://github.com/tulaafrica/anydoc/releases), unzip
+  it into `node_modules/react-native-anydoc/ios/`, then `pod install`.
+  Or build it from source (Rust + Xcode):
+
+  ```sh
+  rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+  ./node_modules/react-native-anydoc/scripts/build-rust-ios.sh
+  ```
 
 ## Use
 
@@ -64,10 +89,23 @@ if (result.status === 'ok') {
 **The contract:** the promise **never rejects for document reasons** —
 corrupt, encrypted, and hostile inputs all resolve to
 `{status: 'fallback'}`; the Rust side maps even its own panics to that. A
-*rejection* means the native module itself is missing or broken (32-bit
-x86 emulator, bad install) — catch it and route to whatever fallback your
-app has. PDF is refused by design (`unsupported-format`): the platform's
-own viewer renders PDFs better than any re-conversion.
+*rejection* means the native module itself is missing or broken (an ABI
+without a prebuilt slice, a bad install) — catch it and route to whatever
+fallback your app has:
+
+```ts
+async function convert(bytes: Uint8Array) {
+  try {
+    return await convertDocumentToIr(bytes)
+  } catch {
+    // The MODULE is broken, not the document. Degrade, don't block:
+    return { status: 'fallback', reason: 'native-module-missing', detail: '' } as const
+  }
+}
+```
+
+PDF is refused by design (`unsupported-format`): the platform's own viewer
+renders PDFs better than any re-conversion.
 
 Conversion runs on Nitro's thread pool; the JS thread never blocks. The
 result JSON crosses the bridge as a native string (UTF-8→UTF-16 in C++),
@@ -82,6 +120,7 @@ buffer *is* the Rust deallocator.
   "sourceType": "docx",
   "pages": [{
     "pageIndex": 0,
+    "name": "Asset Quality",   // spreadsheets: one NAMED page per sheet
     "blocks": [
       { "type": "heading", "level": 1, "runs": [{ "text": "Title", "bold": true, "fontFamily": "Calibri", "fontSize": 21 }] },
       { "type": "paragraph", "align": "justify", "runs": [{ "text": "Body…", "commentIds": ["0"] }] },
@@ -89,13 +128,35 @@ buffer *is* the Rust deallocator.
       { "type": "image", "assetRef": "word/media/image1.png", "width": 320, "height": 200 }
     ]
   }],
-  "comments": [{ "id": "0", "author": "Reviewer", "date": "…", "blocks": [] }]
+  "comments": [{ "id": "0", "author": "Reviewer", "date": "…", "text": "Margin note." }]
 }
 ```
 
-Sizes are in pixels, colors are `#RRGGBB`, and every presentation field is
-optional — absent means "renderer's default", which keeps real-world IR
-small. A `.pptx` arrives as one IR page per slide.
+The shape in detail:
+
+- **Pages** — a `.pptx`/`.ppt`/`.odp` arrives as one page per slide; a
+  multi-sheet `.xlsx`/`.ods` as one **named** page per sheet (the name is
+  the sheet's tab). Word formats emit a single page (Word stores no page
+  breaks — they are computed at layout time).
+- **Runs** carry the formatting: `bold`, `italic`, `underline`,
+  `strikethrough`, `fontFamily`, `fontSize` (px), `color` (`#RRGGBB`),
+  `highlightColor` (Word's 16-name enum), `verticalAlign`, `caps`, and
+  `commentIds`.
+- **Blocks** carry layout: `align`, `indent`, `spacing` (px), table
+  `borders`/`columnWidths`, cell `background`/`colSpan`/`rowSpan`.
+- **Comments** are document-level; the runs inside a comment's range carry
+  its id in `commentIds`, so highlights and tap-to-open need no extra
+  bookkeeping — and runs with different comment coverage are never merged.
+- Every presentation field is **optional** — absent means "renderer's
+  default", which keeps real-world IR small.
+- **Images** never carry bytes in the IR; each `image` block has an
+  `assetRef` into `result.assets`.
+
+## Upstream
+
+Upstream anydoc moves fast and this fork tracks it: the fork's Markdown
+output is kept byte-identical to upstream (verified by the original
+snapshot suite on every change), so merges stay routine.
 
 ## License
 
