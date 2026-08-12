@@ -17,6 +17,9 @@ Pod::Spec.new do |s|
   # and consumers get it from the GitHub Release via the prepare flow
   # described in the README (it is far too large for the npm tarball).
   s.source_files = ["cpp/**/*.{h,hpp,cpp}"]
+  # cpp-adapter.cpp is the Android JNI_OnLoad; iOS registration goes through
+  # nitrogen's generated Swift autolinking instead.
+  s.exclude_files = ["cpp/cpp-adapter.cpp"]
   s.vendored_frameworks = "ios/AnydocCore.xcframework"
 
   # Everything nitrogen generated (specs, Swift bridges, autolinking).
