@@ -1,2 +1,9 @@
 # Fixture bytes are snapshot ground truth: never EOL-convert them.
 tests/fixtures/** -text
+
+# The root README is OURS (react-native-anydoc), not upstream's. Keep it
+# from conflicting on every upstream merge. Needs a one-time local config:
+#   git config merge.ours.driver true
+# (without it, a conflicting merge just falls back to a normal manual
+# resolution - resolve by keeping our side.)
+README.md merge=ours
