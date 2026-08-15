@@ -19,6 +19,10 @@ no server ever holds plaintext.
 npm install react-native-anydoc react-native-nitro-modules
 ```
 
+Adds **~2 MB per ABI** to your app (≈1 MB compressed in the store
+download) and 44 kB of JS — details in the
+[package README](react-native/README.md#size).
+
 **→ Full package docs: [react-native/README.md](react-native/README.md)** —
 install (Android is automatic; iOS grabs one prebuilt XCFramework from
 [Releases](https://github.com/tulaafrica/anydoc/releases)), the API and its

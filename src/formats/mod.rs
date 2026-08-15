@@ -6,6 +6,7 @@ mod doc;
 mod docx;
 mod epub;
 mod odf;
+#[cfg(feature = "pdf")]
 pub mod pdf;
 mod ppt;
 mod pptx;

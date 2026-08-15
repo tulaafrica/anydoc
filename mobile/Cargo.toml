@@ -9,7 +9,10 @@ license = "MIT"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-anydoc = { path = ".." }
+# default-features = false drops the `pdf` feature: this FFI refuses PDFs
+# before conversion (platform viewers render them better), so linking
+# pdf-inspector would be pure dead weight in every app binary.
+anydoc = { path = "..", default-features = false }
 
 [profile.release]
 opt-level = "z"

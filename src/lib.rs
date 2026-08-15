@@ -118,9 +118,16 @@ pub fn to_markdown_bytes(
 ) -> Result<String, ConvertError> {
     let format = resolve_format(bytes, format.into())?;
     // PDFs convert to Markdown directly (pdf-inspector) without passing
-    // through the document model.
+    // through the document model. Without the `pdf` feature the format is
+    // still DETECTED (magic-byte sniff, no parser involved) but conversion
+    // reports it as unsupported.
     if format == Format::Pdf {
+        #[cfg(feature = "pdf")]
         return formats::pdf::to_markdown(bytes);
+        #[cfg(not(feature = "pdf"))]
+        return Err(ConvertError::Unsupported(
+            "PDF support is not compiled in (crate feature \"pdf\")".to_string(),
+        ));
     }
     Ok(document_to_markdown(&to_document(bytes, format)?))
 }
