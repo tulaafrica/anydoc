@@ -74,10 +74,21 @@ is too large for the npm tarball, so it ships as GitHub Release assets:
   ./node_modules/react-native-anydoc/scripts/build-rust.sh
   ```
 
-- **iOS** — download `AnydocCore.xcframework.zip` from the
-  [matching release](https://github.com/tulaafrica/anydoc/releases), unzip
-  it into `node_modules/react-native-anydoc/ios/`, then `pod install`.
-  Or build it from source (Rust + Xcode):
+- **iOS** — also nothing to do: the package's `postinstall` downloads
+  `AnydocCore.xcframework` from the matching release on macOS (skipped
+  when it's already present, when not on macOS, or with
+  `ANYDOC_SKIP_IOS_CORE=1`; point `ANYDOC_IOS_CORE_URL` at a mirror if
+  GitHub is unreachable). Then `pod install` as usual. If the download was
+  skipped or failed, run it by hand:
+
+  ```sh
+  node node_modules/react-native-anydoc/scripts/install-anydoc-core.js
+  ```
+
+  Or grab the zip from the
+  [matching release](https://github.com/tulaafrica/anydoc/releases) and
+  unzip it into `node_modules/react-native-anydoc/ios/` yourself — or
+  build from source (Rust + Xcode):
 
   ```sh
   rustup target add aarch64-apple-ios aarch64-apple-ios-sim

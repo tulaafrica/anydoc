@@ -1,7 +1,7 @@
 {
   "name": "react-native-anydoc",
-  "version": "0.3.0",
-  "description": "Any office document (docx, doc, pptx, xlsx, odt, rtf, epub…) to a structured DocumentIR, converted natively in Rust, off the JS thread",
+  "version": "0.3.1",
+  "description": "Any office document (docx, doc, pptx, xlsx, odt, rtf, epub\u2026) to a structured DocumentIR, converted natively in Rust, off the JS thread",
   "main": "src/index.ts",
   "license": "MIT",
   "author": "Tula (https://github.com/tulaafrica)",
@@ -27,7 +27,8 @@
   ],
   "scripts": {
     "codegen": "nitrogen",
-    "build:rust": "./scripts/build-rust.sh"
+    "build:rust": "./scripts/build-rust.sh",
+    "postinstall": "node scripts/install-anydoc-core.js"
   },
   "peerDependencies": {
     "react-native": "*",
@@ -45,6 +46,7 @@
     "nitrogen",
     "nitro.json",
     "scripts",
+    "RNAnydoc.podspec",
     "README.md",
     "!android/build",
     "!android/.cxx",
