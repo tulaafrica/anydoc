@@ -176,6 +176,10 @@ The shape in detail:
   cached display `labels`). Draw the kinds you support; for the rest,
   rebuild the classic titled categories × series data table from
   `categories` × `labels` — the block always carries enough to do so.
+- **Equations** (Word OMML, ODF/EPUB MathML) arrive as their **LaTeX source**
+  — inline formulas as italic runs, displayed formulas as centered italic
+  paragraphs — so nothing is lost while the IR has no math block yet.
+  **Checkboxes** (form controls, task lists) arrive as ☐ / ☑ glyphs.
 - **Runs** carry the formatting: `bold`, `italic`, `underline`,
   `strikethrough`, `fontFamily`, `fontSize` (px), `color` (`#RRGGBB`),
   `highlightColor` (Word's 16-name enum), `verticalAlign`, `caps`, and
