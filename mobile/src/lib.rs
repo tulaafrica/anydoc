@@ -203,6 +203,34 @@ mod tests {
     }
 
     #[test]
+    fn math_emits_flagged_runs_display_as_centered_paragraph() {
+        use anydoc::model::{Block, Document, Inline};
+        let doc = Document {
+            blocks: vec![
+                Block::Paragraph(vec![
+                    Inline::plain("where "),
+                    Inline::Math("\\beta_{0}".to_string()),
+                ]),
+                Block::Math("n=\\frac{N}{1+Ne^{2}}".to_string()),
+            ],
+            ..Default::default()
+        };
+        let out = crate::ir::document_to_ir(&doc, "docx");
+        assert!(
+            out.json.contains("{\"text\":\"\\\\beta_{0}\",\"italic\":true,\"math\":true}"),
+            "inline: {}",
+            out.json
+        );
+        assert!(
+            out.json.contains(
+                "{\"type\":\"paragraph\",\"align\":\"center\",\"runs\":[{\"text\":\"n=\\\\frac{N}{1+Ne^{2}}\",\"italic\":true,\"math\":true}]}"
+            ),
+            "display: {}",
+            out.json
+        );
+    }
+
+    #[test]
     fn chart_blocks_emit_typed_chart_json() {
         use anydoc::model::{Block, Chart, ChartKind, ChartSeries, Document};
         let doc = Document {

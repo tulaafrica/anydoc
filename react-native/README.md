@@ -177,8 +177,10 @@ The shape in detail:
   rebuild the classic titled categories × series data table from
   `categories` × `labels` — the block always carries enough to do so.
 - **Equations** (Word OMML, ODF/EPUB MathML) arrive as their **LaTeX source**
-  — inline formulas as italic runs, displayed formulas as centered italic
-  paragraphs — so nothing is lost while the IR has no math block yet.
+  in runs flagged `math: true` — an inline formula sits among its prose, a
+  displayed formula is a centered paragraph whose only run is math. The
+  runs are italic too, so a renderer without a typesetter still shows them
+  legibly; one with a typesetter (MathJax, KaTeX) has the source verbatim.
   **Checkboxes** (form controls, task lists) arrive as ☐ / ☑ glyphs.
 - **Runs** carry the formatting: `bold`, `italic`, `underline`,
   `strikethrough`, `fontFamily`, `fontSize` (px), `color` (`#RRGGBB`),

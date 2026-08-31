@@ -90,6 +90,10 @@ struct RunFormat {
     color: Option<String>,
     vert: Option<&'static str>,
     caps: Option<&'static str>,
+    /// The run's text is LaTeX source (an equation), not prose. Renderers
+    /// that can typeset do; the italic flag rides along so older ones show
+    /// the source legibly.
+    math: bool,
 }
 
 struct Run {
@@ -122,6 +126,7 @@ fn run_format(style: &Style, fonts: &[String]) -> RunFormat {
             anydoc::model::Caps::All => "all",
             anydoc::model::Caps::Small => "small",
         }),
+        math: false,
     }
 }
 
@@ -168,6 +173,9 @@ fn write_runs(runs: &[Run], out: &mut String) {
         if let Some(c) = f.caps {
             out.push(',');
             str_field(out, "caps", c);
+        }
+        if f.math {
+            out.push_str(",\"math\":true");
         }
         if !f.comment_ids.is_empty() {
             out.push_str(",\"commentIds\":[");
@@ -304,7 +312,8 @@ impl<'a> Emitter<'a> {
                         // No math renderer in the IR yet: the LaTeX source,
                         // italic, keeps the formula legible and searchable
                         // rather than dropping it.
-                        let mut format = RunFormat { italic: true, ..RunFormat::default() };
+                        let mut format =
+                            RunFormat { italic: true, math: true, ..RunFormat::default() };
                         format.comment_ids = emitter.open_comments.clone();
                         push_run(current, tex.trim(), format);
                     }
@@ -511,10 +520,13 @@ impl<'a> Emitter<'a> {
                 if tex.is_empty() {
                     return;
                 }
+                // A paragraph whose only run is math IS display math to a
+                // renderer that typesets; older ones show centered italic
+                // source. No new block type, so nothing is ever dropped.
                 sep(out, first);
                 out.push_str("{\"type\":\"paragraph\",\"align\":\"center\",\"runs\":[{");
                 str_field(out, "text", tex);
-                out.push_str(",\"italic\":true}]}");
+                out.push_str(",\"italic\":true,\"math\":true}]}");
             }
             Block::Chart(chart) => {
                 // The typed chart block, followed by nothing else: a renderer
