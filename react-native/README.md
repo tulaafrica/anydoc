@@ -48,8 +48,8 @@ What the package actually adds to an app:
 | JS (npm tarball) | 44 kB unpacked |
 | Rust core, linked into your app | **~2.0 MB per ABI**, ~1 MB compressed in the store download |
 
-Don't be alarmed by the release assets (a ~78 MB Android zip, a ~166 MB
-XCFramework): those are *static archives* — per-function sections, three
+Don't be alarmed by the release assets (a ~32 MB Android zip, a ~21 MB
+XCFramework zip): those are *static archives* — per-function sections, three
 Android ABIs, device + simulator iOS slices. The linker keeps only what
 your app actually calls. The core is built with `opt-level = "z"`, fat
 LTO and stripped symbols; dead code is eliminated at link time, and the
