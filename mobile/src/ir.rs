@@ -300,6 +300,19 @@ impl<'a> Emitter<'a> {
                             }
                         }
                     },
+                    Inline::Math(tex) => {
+                        // No math renderer in the IR yet: the LaTeX source,
+                        // italic, keeps the formula legible and searchable
+                        // rather than dropping it.
+                        let mut format = RunFormat { italic: true, ..RunFormat::default() };
+                        format.comment_ids = emitter.open_comments.clone();
+                        push_run(current, tex.trim(), format);
+                    }
+                    Inline::Checkbox(checked) => {
+                        let mut format = RunFormat::default();
+                        format.comment_ids = emitter.open_comments.clone();
+                        push_run(current, if *checked { "\u{2611} " } else { "\u{2610} " }, format);
+                    }
                     // Zero-width in the source; nothing to draw. Slide anchors
                     // are handled a level up as page breaks; ParaPres is
                     // lifted onto the block by write_block.
@@ -490,6 +503,18 @@ impl<'a> Emitter<'a> {
             Block::Rule => {
                 sep(out, first);
                 out.push_str("{\"type\":\"paragraph\",\"runs\":[]}");
+            }
+            Block::Math(tex) => {
+                // A displayed formula: its LaTeX source as a centered italic
+                // paragraph (no math renderer in the IR yet).
+                let tex = tex.trim();
+                if tex.is_empty() {
+                    return;
+                }
+                sep(out, first);
+                out.push_str("{\"type\":\"paragraph\",\"align\":\"center\",\"runs\":[{");
+                str_field(out, "text", tex);
+                out.push_str(",\"italic\":true}]}");
             }
             Block::Chart(chart) => {
                 // The typed chart block, followed by nothing else: a renderer

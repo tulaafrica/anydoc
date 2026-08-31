@@ -17,7 +17,7 @@ mod table;
 pub use asset::{Asset, AssetId};
 pub use block::Block;
 pub use chart::{Chart, ChartKind, ChartSeries};
-pub use inline::{CommentMarkKind, Inline, inlines_are_empty, inlines_to_plain_text};
+pub use inline::{CommentMarkKind, Inline, checkbox_text, inlines_are_empty, inlines_to_plain_text};
 pub use link::{AnchorId, ImageSource, LinkTarget};
 pub use list::{List, ListItem, MarkerKind};
 pub use style::{Align, Caps, FontId, Highlight, ParaProps, Style, VertAlign, parse_hex_color};

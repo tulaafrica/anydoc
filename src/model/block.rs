@@ -37,6 +37,8 @@ pub enum Block {
     /// to [`Chart::fallback_blocks`] (bold title + data table); renderers
     /// that can draw get the numbers.
     Chart(Chart),
+    /// A displayed formula, as LaTeX math without delimiters.
+    Math(String),
 }
 
 impl Block {

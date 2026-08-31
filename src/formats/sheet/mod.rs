@@ -1,275 +1,87 @@
-//! Excel spreadsheets (xlsx, xlsm, xlsb, xls) via calamine.
+//! Excel spreadsheets (xlsx, xlsm, xlsb, xls). Every container is read
+//! in-house: SpreadsheetML as XML (xlsx, xlsm) or binary (xlsb), and
+//! OLE-based BIFF (xls). All three share the number format engine and grid
+//! assembly, so one workbook saved in any of them converts identically.
+
+mod charts;
+mod controls;
+mod numfmt;
+mod xls;
+mod xlsb;
+mod xlsx;
 
 use crate::error::ConvertError;
-use crate::model::{Block, Cell, Document, GridBuilder, Inline, TableKind};
-use crate::package::relationships::{read_rels, rel_type, rels_part_for};
-use crate::package::xml::ns;
+use crate::model::Document;
+use crate::package::archive::probe_ole;
+use crate::package::relationships::{read_rels, rel_type};
 use crate::package::{Package, path};
-use crate::shared::header::resolve_header_rows;
-use crate::shared::text::clean_text;
-use calamine::{Data, Dimensions, Reader, Sheets, open_workbook_auto_from_rs};
-use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
-
-/// Run one calamine operation behind a panic barrier: the calamine fork can
-/// panic on corrupt containers (pending an upstream fix), and a dependency
-/// panic must degrade to a typed error - while bugs in this crate's own code
-/// stay panics. `AssertUnwindSafe` is sound here because a caught panic
-/// always propagates as an error, so the workbook is never used again.
-fn contained<T>(op: &str, f: impl FnOnce() -> T) -> Result<T, ConvertError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
-        log::warn!("spreadsheet parser panicked during {op} on malformed input");
-        ConvertError::malformed("unreadable workbook (parser aborted)")
-    })
-}
 
 pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
-    let mut workbook =
-        contained("workbook open", || open_workbook_auto_from_rs(Cursor::new(bytes)))?
-            .map_err(map_open_error)?;
-    let sheet_names = contained("sheet listing", || workbook.sheet_names().to_owned())?;
-    let multi_sheet = sheet_names.len() > 1;
-    let merged = merged_regions(&mut workbook, &sheet_names)?;
-    // TULA FORK: charts, rendered as titled data tables (the docx/pptx
-    // treatment) after their sheet's cells. xlsx-only; every failure inside
-    // degrades to "no charts", never to a failed conversion.
-    let mut charts = workbook_charts(bytes);
-
-    let mut doc = Document::default();
-    let mut failed = 0usize;
-    for name in &sheet_names {
-        let range = match contained("worksheet read", || workbook.worksheet_range(name))? {
-            Ok(r) => r,
-            Err(e) => {
-                // A dedicated CHART SHEET has no cell range at all - its
-                // charts are the whole point, so they still render.
-                if push_sheet_charts(&mut doc, &mut charts, name, multi_sheet) {
-                    continue;
-                }
-                log::warn!("skipping unreadable sheet {name:?}: {e}");
-                failed += 1;
-                continue;
-            }
+    const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    if bytes.starts_with(&OLE_MAGIC) {
+        // An encrypted OOXML package is an OLE container carrying no BIFF
+        // workbook stream, so it has to be named before the reader looks
+        // for one.
+        return match probe_ole(bytes) {
+            Some(e @ ConvertError::Encrypted) => Err(e),
+            _ => xls::parse(bytes),
         };
-        if range.is_empty() {
-            push_sheet_charts(&mut doc, &mut charts, name, multi_sheet);
-            continue;
-        }
-        // Merged regions in range-relative coordinates: the top-left cell
-        // becomes a spanning origin, the other positions are covered.
-        let start = range.start().unwrap_or((0, 0));
-        let (height, width) = (range.height(), range.width());
-        let mut origins: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
-        let mut covered: HashSet<(usize, usize)> = HashSet::new();
-        for d in merged.get(name.as_str()).map(Vec::as_slice).unwrap_or_default() {
-            // Intersect the absolute merged region with the used range first:
-            // a region wholly above or left of the range must not saturate
-            // onto relative (0,0), and positions outside the range are never
-            // materialized (a crafted region list must not force insertions
-            // beyond the cells that actually exist).
-            let (row0, col0) = (d.start.0.max(start.0), d.start.1.max(start.1));
-            let row_end = (d.end.0 as u64 + 1).min(start.0 as u64 + height as u64);
-            let col_end = (d.end.1 as u64 + 1).min(start.1 as u64 + width as u64);
-            if (row0 as u64) >= row_end || (col0 as u64) >= col_end {
-                continue;
-            }
-            // Translate the non-empty intersection to range-relative form.
-            let r0 = (row0 - start.0) as usize;
-            let c0 = (col0 - start.1) as usize;
-            let r1 = (row_end - start.0 as u64) as usize;
-            let c1 = (col_end - start.1 as u64) as usize;
-            if r1 - r0 == 1 && c1 - c0 == 1 {
-                continue;
-            }
-            origins.insert((r0, c0), ((c1 - c0) as u32, (r1 - r0) as u32));
-            for r in r0..r1 {
-                for c in c0..c1 {
-                    if (r, c) != (r0, c0) {
-                        covered.insert((r, c));
-                    }
-                }
-            }
-        }
-        let mut builder = GridBuilder::new();
-        for (r, row) in range.rows().enumerate() {
-            builder.next_row();
-            for (c, data) in row.iter().enumerate() {
-                if covered.contains(&(r, c)) {
-                    builder.covered();
-                    continue;
-                }
-                let text = format_data(data);
-                let cell = if text.is_empty() {
-                    Cell::default()
-                } else {
-                    Cell::from_inlines(vec![Inline::plain(text)])
-                };
-                match origins.get(&(r, c)) {
-                    Some(&(col_span, row_span)) => {
-                        builder.place(Cell::spanning(cell.blocks, col_span, row_span))?
-                    }
-                    None => builder.place(cell)?,
-                }
-            }
-        }
-        // A spreadsheet marks no header row, so the shape of the data decides.
-        let mut table = builder.finish(TableKind::Data);
-        if table.grid.is_empty() {
-            continue;
-        }
-        table.header_rows = resolve_header_rows(&table, 0);
-        if multi_sheet {
-            doc.blocks.push(Block::heading(2, vec![Inline::plain(name.clone())]));
-        }
-        doc.blocks.push(Block::Table(table));
-        if let Some(chart_blocks) = charts.remove(name.as_str()) {
-            doc.blocks.extend(chart_blocks);
-        }
     }
-    if !sheet_names.is_empty() && failed == sheet_names.len() {
-        return Err(ConvertError::malformed("no sheet in the workbook could be read"));
+    // Failing to open as a ZIP means not a workbook; a resource limit
+    // tripped by a valid archive still propagates.
+    let mut pkg = match Package::open(bytes) {
+        Ok(pkg) => pkg,
+        Err(ConvertError::Malformed { .. }) => return Err(not_a_workbook()),
+        Err(e) => return Err(e),
+    };
+    let Some(wb_part) = main_part(&mut pkg)? else {
+        return Err(not_a_workbook());
+    };
+    match classify(&mut pkg, &wb_part)? {
+        Some(Container::Xml) => xlsx::parse(&mut pkg, &wb_part),
+        Some(Container::Bin) => xlsb::parse(&mut pkg, &wb_part),
+        None => Err(not_a_workbook()),
     }
-    Ok(doc)
 }
 
-/// Append a sheet's charts (with its heading, if none was emitted for cells).
-/// Returns whether anything was rendered for the sheet.
-fn push_sheet_charts(
-    doc: &mut Document,
-    charts: &mut HashMap<String, Vec<Block>>,
-    name: &str,
-    multi_sheet: bool,
-) -> bool {
-    let Some(chart_blocks) = charts.remove(name) else { return false };
-    if multi_sheet {
-        doc.blocks.push(Block::heading(2, vec![Inline::plain(name.to_string())]));
-    }
-    doc.blocks.extend(chart_blocks);
-    true
+fn not_a_workbook() -> ConvertError {
+    ConvertError::malformed("not a readable workbook container")
 }
 
-/// TULA FORK: every chart in the workbook, as blocks, keyed by the OWNING
-/// sheet's name: workbook part -> sheet r:id -> worksheet/chartsheet part ->
-/// drawing part -> chart parts, each rendered by the same
-/// `shared::drawingml::chart_blocks` that docx and pptx use. Only xlsx has
-/// these parts; on anything else (`Package::open` fails on xls/ods-without-
-/// workbook) the map is empty and the caller renders cells alone.
-fn workbook_charts(bytes: &[u8]) -> HashMap<String, Vec<Block>> {
-    let mut out = HashMap::new();
-    let Ok(mut pkg) = Package::open(bytes) else { return out };
-    let Ok(root_rels) = read_rels(&mut pkg, "_rels/.rels") else { return out };
-    let workbook_part = root_rels
+enum Container {
+    Xml,
+    Bin,
+}
+
+/// The package's main part: the root relationship names it wherever it
+/// lives, so it decides ahead of the conventional locations, which a
+/// package may also contain as leftovers.
+fn main_part(pkg: &mut Package) -> Result<Option<String>, ConvertError> {
+    if let Some(target) = read_rels(pkg, "_rels/.rels")?
         .first_of_type(rel_type::OFFICE_DOCUMENT)
         .and_then(|rel| path::resolve("", &rel.target).ok())
-        .map(|t| t.path)
-        .unwrap_or_else(|| "xl/workbook.xml".to_string());
-    let Ok(Some(workbook)) = pkg.optional_xml_part(&workbook_part) else { return out };
-    let Ok(workbook_rels) = read_rels(&mut pkg, &rels_part_for(&workbook_part)) else {
-        return out;
+    {
+        return Ok(Some(target.path));
+    }
+    Ok(["xl/workbook.xml", "xl/workbook.bin"]
+        .into_iter()
+        .find(|name| pkg.has_part(name))
+        .map(str::to_string))
+}
+
+/// The container a main part belongs to, from its own bytes rather than its
+/// name: a SpreadsheetML workbook is XML, an xlsb one is a record stream.
+fn classify(pkg: &mut Package, part: &str) -> Result<Option<Container>, ConvertError> {
+    let Some(bytes) = pkg.part(part)? else {
+        return Ok(None);
     };
-
-    for sheet in workbook.descendants_any("sheet") {
-        let Some(name) = sheet.attr_any("name") else { continue };
-        let Some(rel_id) = sheet.attr_qualified(ns::R, "id") else { continue };
-        let Some(target) = workbook_rels.internal_target(rel_id) else { continue };
-        let Ok(sheet_part) = path::resolve(&workbook_part, target) else { continue };
-        let blocks = sheet_chart_blocks(&mut pkg, &sheet_part.path);
-        if !blocks.is_empty() {
-            out.insert(name.to_string(), blocks);
-        }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    // A UTF-16 part opens on its byte order mark rather than the tag.
+    let is_xml = matches!(body.iter().find(|b| !b.is_ascii_whitespace()), Some(b'<' | 0xFF | 0xFE));
+    if is_xml {
+        return Ok(Some(Container::Xml));
     }
-    out
-}
-
-/// The charts anchored on one sheet, in the drawing's document order.
-fn sheet_chart_blocks(pkg: &mut Package, sheet_part: &str) -> Vec<Block> {
-    let mut blocks = Vec::new();
-    let Ok(sheet_rels) = read_rels(pkg, &rels_part_for(sheet_part)) else { return blocks };
-    let drawing_parts: Vec<String> = sheet_rels
-        .iter()
-        .filter(|(_, rel)| rel.rel_type.ends_with("/drawing"))
-        .filter_map(|(_, rel)| path::resolve(sheet_part, &rel.target).ok().map(|t| t.path))
-        .collect();
-
-    for drawing_part in drawing_parts {
-        let Ok(Some(drawing)) = pkg.optional_xml_part(&drawing_part) else { continue };
-        let Ok(drawing_rels) = read_rels(pkg, &rels_part_for(&drawing_part)) else { continue };
-        // Document order of the DRAWING decides chart order, not rels-map order.
-        for chart_ref in drawing.descendants(ns::CHART, "chart") {
-            let Some(rel_id) = chart_ref.attr_qualified(ns::R, "id") else { continue };
-            let Some(target) = drawing_rels.internal_target(rel_id) else { continue };
-            let Ok(chart_part) = path::resolve(&drawing_part, target) else { continue };
-            match pkg.optional_xml_part(&chart_part.path) {
-                Ok(Some(root)) => blocks.extend(crate::shared::drawingml::chart_blocks(&root)),
-                _ => log::warn!("skipping unreadable chart part {}", chart_part.path),
-            }
-        }
-    }
-    blocks
-}
-
-/// Merged regions per sheet, where the container format exposes them (xlsx
-/// via each worksheet's mergeCells part, xls via BIFF MERGEDCELLS).
-fn merged_regions<RS: std::io::Read + std::io::Seek>(
-    workbook: &mut Sheets<RS>,
-    sheet_names: &[String],
-) -> Result<HashMap<String, Vec<Dimensions>>, ConvertError> {
-    let mut out: HashMap<String, Vec<Dimensions>> = HashMap::new();
-    for name in sheet_names {
-        let regions = match workbook {
-            Sheets::Xlsx(x) => {
-                contained("merged-region listing", || x.merge_cells_by_sheet_name(name))?
-                    .map_err(|e| e.to_string())
-            }
-            Sheets::Xls(x) => {
-                contained("merged-cell listing", || x.merge_cells_by_sheet_name(name))?
-                    .map_err(|e| e.to_string())
-            }
-            _ => continue,
-        };
-        match regions {
-            Ok(dims) if !dims.is_empty() => {
-                out.insert(name.clone(), dims);
-            }
-            Ok(_) => {}
-            Err(e) => log::warn!("skipping unreadable merged-region list for {name:?}: {e}"),
-        }
-    }
-    Ok(out)
-}
-
-fn map_open_error(e: calamine::Error) -> ConvertError {
-    let text = e.to_string();
-    if text.to_ascii_lowercase().contains("password") {
-        ConvertError::Encrypted
-    } else {
-        ConvertError::malformed(format!("unreadable workbook: {text}"))
-    }
-}
-
-fn format_data(data: &Data) -> String {
-    match data {
-        Data::Empty => String::new(),
-        // Untrimmed: leading/trailing whitespace in a cell is source content.
-        Data::String(s) => clean_text(s),
-        Data::Float(f) => format_float(*f),
-        Data::Int(i) => i.to_string(),
-        Data::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
-        Data::Error(e) => format!("#{e:?}"),
-        Data::DateTime(dt) if dt.is_duration() => format_duration_days(dt.as_f64()),
-        // A serial below one whole day carries no date: it is a time of day.
-        Data::DateTime(dt) if dt.as_f64().abs() < 1.0 => format_time_of_day(dt.as_f64()),
-        Data::DateTime(dt) => match dt.as_datetime() {
-            Some(d) => {
-                let s = d.to_string();
-                // Sub-second digits are noise from the serial's float.
-                let s = s.split('.').next().unwrap_or(&s);
-                s.strip_suffix(" 00:00:00").unwrap_or(s).to_string()
-            }
-            None => format_float(dt.as_f64()),
-        },
-        Data::DateTimeIso(s) | Data::DurationIso(s) => s.clone(),
-    }
+    Ok((!body.is_empty()).then_some(Container::Bin))
 }
 
 /// Float formatting at the 15 significant decimal digits a spreadsheet
@@ -298,156 +110,37 @@ fn format_duration_days(days: f64) -> String {
     format!("{sign}{h}:{m:02}:{s:02}")
 }
 
+/// Decode an RK value, the packed number both binary containers use. Bit 0
+/// asks for a hundredth of the result; bit 1 selects an integer over the
+/// high 30 bits of a double.
+pub(super) fn rk_number(rk: u32) -> f64 {
+    let value = if rk & 0x02 != 0 {
+        f64::from((rk as i32) >> 2)
+    } else {
+        f64::from_bits(u64::from(rk & 0xFFFF_FFFC) << 32)
+    };
+    if rk & 0x01 != 0 { value / 100.0 } else { value }
+}
+
+/// The literal an error code displays as, shared by both binary containers.
+pub(super) fn error_literal(code: u8) -> Option<&'static str> {
+    Some(match code {
+        0x00 => "#NULL!",
+        0x07 => "#DIV/0!",
+        0x0F => "#VALUE!",
+        0x17 => "#REF!",
+        0x1D => "#NAME?",
+        0x24 => "#NUM!",
+        0x2A => "#N/A",
+        0x2B => "#GETTING_DATA",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    /// Minimal xlsx with a used range at D11:E12 and the given merged region.
-    fn xlsx_with_merge(merge_ref: &str) -> Vec<u8> {
-        let sheet = format!(
-            r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="11"><c r="D11" t="inlineStr"><is><t>x</t></is></c><c r="E11" t="inlineStr"><is><t>y</t></is></c></row><row r="12"><c r="D12" t="inlineStr"><is><t>z</t></is></c><c r="E12" t="inlineStr"><is><t>w</t></is></c></row></sheetData><mergeCells count="1"><mergeCell ref="{merge_ref}"/></mergeCells></worksheet>"#
-        );
-        let parts: &[(&str, &str)] = &[
-            (
-                "[Content_Types].xml",
-                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
-            ),
-            (
-                "_rels/.rels",
-                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/workbook.xml",
-                r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
-            ),
-            (
-                "xl/_rels/workbook.xml.rels",
-                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
-            ),
-        ];
-        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (name, body) in parts {
-            w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-            w.write_all(body.as_bytes()).unwrap();
-        }
-        w.start_file("xl/worksheets/sheet1.xml", zip::write::SimpleFileOptions::default()).unwrap();
-        w.write_all(sheet.as_bytes()).unwrap();
-        w.finish().unwrap().into_inner()
-    }
-
-
-    /// Minimal xlsx whose one worksheet anchors one chart (title + a cached
-    /// series). Exercises the whole chain: workbook -> sheet rels -> drawing
-    /// -> chart part -> chart_blocks.
-    fn xlsx_with_chart() -> Vec<u8> {
-        let parts: &[(&str, &str)] = &[
-            (
-                "[Content_Types].xml",
-                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>"#,
-            ),
-            (
-                "_rels/.rels",
-                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/workbook.xml",
-                r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Revenue" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
-            ),
-            (
-                "xl/_rels/workbook.xml.rels",
-                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/worksheets/sheet1.xml",
-                r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Month</t></is></c><c r="B1" t="inlineStr"><is><t>Sales</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Jan</t></is></c><c r="B2"><v>10</v></c></row></sheetData><drawing r:id="rId2"/></worksheet>"#,
-            ),
-            (
-                "xl/worksheets/_rels/sheet1.xml.rels",
-                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/drawings/drawing1.xml",
-                r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:graphicFrame><c:chart r:id="rId1"/></xdr:graphicFrame></xdr:oneCellAnchor></xdr:wsDr>"#,
-            ),
-            (
-                "xl/drawings/_rels/drawing1.xml.rels",
-                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#,
-            ),
-            (
-                "xl/charts/chart1.xml",
-                r#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Monthly Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:tx><c:strRef><c:f>Revenue!$B$1</c:f><c:strCache><c:pt idx="0"><c:v>Sales</c:v></c:pt></c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:f>Revenue!$A$2</c:f><c:strCache><c:pt idx="0"><c:v>Jan</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>Revenue!$B$2</c:f><c:numCache><c:pt idx="0"><c:v>10</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
-            ),
-        ];
-        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (name, body) in parts {
-            w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-            w.write_all(body.as_bytes()).unwrap();
-        }
-        w.finish().unwrap().into_inner()
-    }
-
-    #[test]
-    fn charts_render_as_titled_tables_after_their_sheet() {
-        let doc = parse(&xlsx_with_chart()).unwrap();
-        // Single sheet: cells table, then one typed chart block whose
-        // fallback is the bold title + categories x series table.
-        assert!(matches!(doc.blocks.first(), Some(Block::Table(_))), "sheet cells first");
-        let Some(Block::Chart(chart)) = doc.blocks.get(1) else {
-            panic!("expected a chart block, got {:?}", doc.blocks.get(1));
-        };
-        assert_eq!(chart.kind, crate::model::ChartKind::Bar);
-        assert_eq!(chart.title.as_deref(), Some("Monthly Sales"));
-        assert_eq!(chart.categories, vec!["Jan"]);
-        assert_eq!(chart.series.len(), 1);
-        assert_eq!(chart.series[0].name, "Sales");
-        assert_eq!(chart.series[0].values, vec![Some(10.0)]);
-        assert_eq!(doc.blocks.len(), 2);
-
-        // The fallback keeps the historical text shape.
-        let fallback = chart.fallback_blocks();
-        let Some(Block::Paragraph(inlines)) = fallback.first() else {
-            panic!("expected the chart title, got {:?}", fallback.first());
-        };
-        let Some(Inline::Text { text, style }) = inlines.first() else {
-            panic!("expected title text");
-        };
-        assert_eq!(text, "Monthly Sales");
-        assert!(style.bold);
-        assert!(matches!(fallback.get(1), Some(Block::Table(_))), "chart data table last");
-        assert_eq!(fallback.len(), 2);
-    }
-
-    fn covered_count(doc: &Document) -> usize {
-        let Some(Block::Table(t)) = doc.blocks.first() else {
-            panic!("expected a table, got {:?}", doc.blocks.first());
-        };
-        t.grid
-            .iter()
-            .flatten()
-            .filter(|s| matches!(s, crate::model::CellSlot::Covered { .. }))
-            .count()
-    }
-
-    #[test]
-    fn merge_inside_the_used_range_covers_cells() {
-        // Harness sanity: an in-range merge must actually load and apply.
-        let doc = parse(&xlsx_with_merge("D11:E11")).unwrap();
-        assert_eq!(covered_count(&doc), 1);
-    }
-
-    #[test]
-    fn merge_outside_the_used_columns_is_ignored() {
-        // M6: the merge overlaps the used rows but not the used columns; the
-        // old relative saturation mapped it onto (0,0) and covered D12.
-        let doc = parse(&xlsx_with_merge("A1:B12")).unwrap();
-        assert_eq!(covered_count(&doc), 0, "out-of-range merge must not cover cells");
-    }
-
-    #[test]
-    fn string_cells_are_not_trimmed() {
-        assert_eq!(format_data(&Data::String("  padded  ".into())), "  padded  ");
-    }
+    use std::io::Cursor;
 
     #[test]
     fn tiny_floats_survive() {
@@ -480,5 +173,41 @@ mod tests {
         let days = (26.0 * 3600.0 + 30.0 * 60.0 + 15.0) / 86_400.0;
         assert_eq!(format_duration_days(days), "26:30:15");
         assert_eq!(format_duration_days(-0.5), "-12:00:00");
+    }
+
+    #[test]
+    fn an_encrypted_ooxml_package_is_not_read_as_biff() {
+        // An encrypted workbook is an OLE container carrying no BIFF
+        // workbook stream, so the container check alone would send it to
+        // the wrong reader.
+        let mut ole = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+        ole.create_stream("EncryptionInfo").unwrap();
+        ole.create_stream("EncryptedPackage").unwrap();
+        let bytes = ole.into_inner().into_inner();
+
+        assert!(matches!(parse(&bytes), Err(ConvertError::Encrypted)));
+    }
+
+    #[test]
+    fn a_package_that_is_not_a_workbook_does_not_convert_as_one() {
+        use std::io::Write as _;
+
+        // Resolving the root relationship reaches any OOXML main part, so
+        // without a workbook check a document would convert to nothing.
+        const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let rels = format!(
+            r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{REL}/officeDocument" Target="word/document.xml"/></Relationships>"#
+        );
+        let doc = r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#;
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, body) in [("_rels/.rels", rels.as_str()), ("word/document.xml", doc)] {
+            zip.start_file(name, opts).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+
+        assert!(matches!(parse(&bytes), Err(ConvertError::Malformed { .. })));
     }
 }
