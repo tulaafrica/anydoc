@@ -63,8 +63,11 @@ dependencies {
   implementation project(":react-native-nitro-modules")
   //noinspection GradleDynamicVersion
   implementation "com.facebook.react:react-android:+"
-  //noinspection GradleDynamicVersion
-  implementation "com.facebook.fbjni:fbjni:+"
+  // No fbjni line on purpose. react-android already requires the exact fbjni React Native was
+  // built against, and there must be exactly one libfbjni.so in an app. A version named here can
+  // only ever disagree with it: "+" floated to 0.8.1 the day it was published (2026-09-26), won
+  // conflict resolution over React Native's 0.7.0, and release apps crashed at launch with
+  // "couldn't find DSO to load: libfbjni.so". Inheriting it cannot drift.
 }
 
 // Nitrogen's generated Kotlin sources + the "boosted by nitro" banner.
@@ -75,6 +78,8 @@ apply from: '../nitrogen/generated/android/RNAnydoc+autolinking.gradle'
 // so they ship as a GitHub Release asset and are fetched on first build.
 // Building from source instead (`yarn build:rust`, needs the Rust
 // toolchain) drops the same files in libs/ and this task self-skips.
+// The Rust core's release, NOT the package version: a JS/Gradle-only release (0.4.2) reuses the
+// 0.4.1 binaries. Keep in step with "anydocCore" in package.json (the iOS download reads that).
 def anydocLibsVersion = "0.4.1"
 def anydocLibsUrl = project.hasProperty("anydocLibsUrl")
   ? project.property("anydocLibsUrl").toString()
