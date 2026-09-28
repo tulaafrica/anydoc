@@ -43,7 +43,10 @@ if (process.platform !== 'darwin') {
   process.exit(0); // iOS builds only happen on macOS; Android is gradle's job
 }
 
-const { version } = require(path.join(root, 'package.json'));
+// The native core has its own release line: a package release that changes no Rust (0.4.2 only
+// fixed Gradle) reuses the previous core instead of needing a rebuilt archive per version.
+const pkg = require(path.join(root, 'package.json'));
+const version = pkg.anydocCore || pkg.version;
 const url =
   process.env.ANYDOC_IOS_CORE_URL ||
   `https://github.com/tulaafrica/anydoc/releases/download/rn-v${version}/AnydocCore.xcframework-${version}.zip`;
