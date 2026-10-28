@@ -11,6 +11,7 @@ fn doc(blocks: Vec<Block>) -> String {
         assets: Vec::new(),
         fonts: Vec::new(),
         comments: Vec::new(),
+        slides: Vec::new(),
     })
 }
 
@@ -56,7 +57,12 @@ fn math_renders_in_dollar_delimiters_and_text_dollars_are_escaped() {
 
 #[test]
 fn math_in_a_table_cell_escapes_pipes() {
-    let cell = |inlines| Cell { blocks: vec![Block::Paragraph(inlines)], col_span: 1, row_span: 1, ..Default::default() };
+    let cell = |inlines| Cell {
+        blocks: vec![Block::Paragraph(inlines)],
+        col_span: 1,
+        row_span: 1,
+        ..Default::default()
+    };
     let md = doc(vec![table_from(
         vec![vec![cell(vec![Inline::plain("abs")]), cell(vec![Inline::Math("|x|".into())])]],
         0,
@@ -582,6 +588,7 @@ fn footnotes() {
         assets: Vec::new(),
         fonts: Vec::new(),
         comments: Vec::new(),
+        slides: Vec::new(),
     });
     assert_eq!(
         md,
@@ -603,6 +610,7 @@ fn empty_and_unreferenced_notes() {
         assets: Vec::new(),
         fonts: Vec::new(),
         comments: Vec::new(),
+        slides: Vec::new(),
     });
     assert_eq!(md, "Text\n\n[^1]: Kept.\n");
 }
@@ -618,6 +626,7 @@ fn duplicate_note_ids_render_one_definition() {
         assets: Vec::new(),
         fonts: Vec::new(),
         comments: Vec::new(),
+        slides: Vec::new(),
     });
     assert_eq!(md, "Text[^1]\n\n[^1]: First wins.\n");
 }

@@ -66,6 +66,9 @@ This fork adds what a *renderer* needs and Markdown can't carry:
 - **Review comments**, anchored to the exact runs they cover.
 - **Typed chart data** — kind, categories, numeric series — instead of a
   flattened table, so apps can draw real charts.
+- **Fixed slide layouts** — every `.pptx` shape at its own position, with
+  theme colours, master/layout inheritance, table styles and autofit
+  resolved, so a slide can be drawn the way PowerPoint draws it.
 - Slide/sheet **pagination** and the **mobile FFI + React Native bridge**.
 
 The fork tracks upstream closely: our Markdown output is kept

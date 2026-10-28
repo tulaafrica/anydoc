@@ -1327,6 +1327,7 @@ impl<'a> Parser<'a> {
             assets: self.assets.assets,
             fonts: Vec::new(),
             comments: Vec::new(),
+            slides: Vec::new(),
         })
     }
 }

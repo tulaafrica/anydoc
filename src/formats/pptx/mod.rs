@@ -4,6 +4,7 @@
 //! policy), rendered as a quote after each slide's content.
 
 mod cascade;
+mod layout;
 
 use crate::error::ConvertError;
 use crate::model::{
@@ -109,6 +110,10 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
         all_rels.push(read_rels(&mut pkg.borrow_mut(), &rels_part_for(p))?);
     }
 
+    // TULA FORK: each slide's fixed layout, built alongside the blocks.
+    let mut slide_layouts = layout::SlideLayouts::new(&pkg, &assets, &pres_part, &pres)?;
+    let mut slides = Vec::new();
+
     for (slide_index, slide_path) in slide_paths.iter().enumerate() {
         let tree = match pkg.borrow_mut().optional_xml_part(slide_path)? {
             Some(t) => t,
@@ -165,6 +170,14 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
             blocks.push(Block::Paragraph(vec![Inline::Anchor(anchor.clone())]));
         }
         parse_shapes(sp_tree, &ctx, &mut blocks)?;
+        if let Some(anchor) = slide_anchors.get(slide_path) {
+            match slide_layouts.slide(slide_path, &tree, slide_rels, anchor) {
+                Ok(Some(layout)) => slides.push(layout),
+                Ok(None) => {}
+                Err(e) if e.is_fatal() => return Err(e),
+                Err(e) => log::warn!("no fixed layout for slide {slide_path}: {e}"),
+            }
+        }
 
         // Speaker notes, set off as a quote (fixed policy: included). The
         // tree is loaded before the `if let` so the package borrow is not
@@ -208,7 +221,14 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
     }
 
     let assets = std::mem::take(&mut assets.borrow_mut().assets);
-    Ok(Document { blocks, notes: Vec::new(), assets, fonts: Vec::new(), comments: Vec::new() })
+    Ok(Document {
+        blocks,
+        notes: Vec::new(),
+        assets,
+        fonts: Vec::new(),
+        comments: Vec::new(),
+        slides,
+    })
 }
 
 fn rel_target_of_type(rels: &Relationships, base: &str, rel_type: &str) -> Option<String> {

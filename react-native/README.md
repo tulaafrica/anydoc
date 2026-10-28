@@ -196,6 +196,87 @@ The shape in detail:
 - **Images** never carry bytes in the IR; each `image` block has an
   `assetRef` into `result.assets`.
 
+### Slides as PowerPoint draws them
+
+A `.pptx` page also carries `slide`: the slide's fixed layout, with every
+shape at its own position. The page's `blocks` still hold the same content
+as flowing text, so a reader can offer both a slide view and a text view.
+
+```jsonc
+"slide": {
+  "width": 1280, "height": 720,                  // px at 96 dpi; scale the whole slide by one factor
+  "background": { "type": "solid", "color": "#0A0815" },
+  "shapes": [                                    // paint order, back to front; groups are flattened
+    {
+      "x": 58, "y": 178, "width": 270, "height": 240,
+      "rotation": 30, "flipH": true,             // optional
+      "geometry": { "type": "roundRect", "radius": 0.032 },
+      "fill": { "type": "solid", "color": "#1C1530" },
+      "line": { "width": 1, "color": "#3B2A66", "dash": "dash", "tailEnd": "triangle" },
+      "shadow": { "dx": 0, "dy": 4, "blur": 8, "color": "#00000059" },
+      "text": {
+        "insets": [10, 5, 10, 5],                // left, top, right, bottom
+        "anchor": "middle",                      // omitted = top
+        "paragraphs": [{
+          "align": "center", "marginLeft": 24, "indent": -24,
+          "lineSpacing": { "lines": 0.9 },       // or { "px": 20 }
+          "spaceBefore": { "px": 6 }, "spaceAfter": { "lines": 0.2 },
+          "bullet": { "text": "•", "color": "#7C3AED", "size": 1.1 },
+          "endSize": 24,
+          "runs": [{ "text": "Kenya", "fontSize": 24, "color": "#FFFFFF", "fontFamily": "Calibri", "bold": true }]
+        }]
+      }
+    },
+    { "x": 0, "y": 0, "width": 160, "height": 120, "geometry": { "type": "ellipse" },
+      "image": { "assetRef": "image3.png", "crop": { "left": 0.25, "top": 0, "right": 0.25, "bottom": 0 } } },
+    { "x": 260, "y": 400, "width": 200, "height": 80,
+      "geometry": { "type": "path", "d": "M0 40 C50 0 50 80 100 40 …Z" }, "preset": "custom", "fill": { … } }
+  ]
+}
+```
+
+Everything is resolved before it reaches you: theme colours, inheritance
+from the slide layout and master (their decoration is already in `shapes`),
+PowerPoint's style references, table styles (including the built-in
+default), autofit shrinking, numbering. Rendering rules a renderer must
+follow to match PowerPoint:
+
+- **Geometry** is `rect`, `roundRect` (`radius` is a fraction of the shorter
+  side), `ellipse`, `line` (top-left to bottom-right; flips pick the other
+  diagonal; it may have zero width or height and must still draw), or
+  `path` - SVG path data in the shape's own px box, non-zero fill rule,
+  `filled: false` for open strokes. Pictures are clipped to their geometry.
+- **Flips mirror the outline, never the text.** Rotation turns both.
+- **Colours** are `#RRGGBB`, or `#RRGGBBAA` when translucent.
+- **Fills** are `solid`, `gradient` (`angle` in degrees, 90 = top to
+  bottom; `radial`; `stops` with `offset` 0-1) or `image` (an `assetRef`
+  stretched over the shape).
+- **Line spacing** `{ "lines": n }` is a multiple of PowerPoint's single
+  spacing, which is **1.2 × the font size**; `{ "px": n }` is absolute.
+  Paragraph spacing in `lines` is relative to the paragraph's first run.
+- **Bullets** sit in the hanging indent: the first line starts at
+  `marginLeft + indent`, wrapped lines at `marginLeft`. A bullet with no
+  `color`/`fontFamily` follows the paragraph's first run; `size` scales it.
+- **Runs**: `baseline` raises (positive) or lowers the run by that fraction
+  of its size, drawn at about two thirds of the size;
+  `letterSpacing` is px; `caps: "all"` renders in capitals. A run whose
+  text contains `\n` breaks the line there.
+- **`wrap: false`** keeps each paragraph on one line, overflowing the box.
+- **Tables** are positioned like shapes; `columns` are px widths, each row
+  has a minimum `height`, and each cell names its grid `col` (cells covered
+  by a merge are omitted) with its own `fill`, `borders`, `insets` and
+  `anchor`.
+- **Charts** carry the same typed data as a `chart` block; draw it inside
+  the frame.
+- **Fonts** are the author's names (`Calibri`, `Cambria`, `Georgia`). Text
+  lands where PowerPoint puts it only with metric-compatible faces: Carlito
+  for Calibri, Caladea for Cambria, Gelasio for Georgia, Arimo for Arial,
+  Tinos for Times New Roman.
+
+A slide whose content cannot all be placed (a producer that left out
+positions) has no `slide`; show its `blocks` instead. Legacy `.ppt` and
+`.odp` decks have no fixed layout yet.
+
 ## Upstream
 
 Upstream anydoc moves fast and this fork tracks it: the fork's Markdown
