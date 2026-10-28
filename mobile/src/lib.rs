@@ -18,6 +18,15 @@
 
 mod ir;
 
+// Conversion is allocation-bound: the XML tree allocates per element and per
+// attribute, and on low-end Android the system allocator takes a lock on every
+// call (measured on a Unisoc SC9832E: a third of all conversion time in
+// je_malloc/je_free and their mutexes). mimalloc's thread-local free lists
+// make those calls cheap. Only this library's Rust allocations use it; the
+// host app's allocator is untouched.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn esc(s: &str) -> String {
@@ -226,6 +235,86 @@ mod tests {
                 "{\"type\":\"paragraph\",\"align\":\"center\",\"runs\":[{\"text\":\"n=\\\\frac{N}{1+Ne^{2}}\",\"italic\":true,\"math\":true}]}"
             ),
             "display: {}",
+            out.json
+        );
+    }
+
+    #[test]
+    fn slide_pages_carry_their_fixed_layout() {
+        use anydoc::model::{
+            Block, Document, Fill, Frame, Geometry, Inline, Rgba, ShapeContent, SlideAlign,
+            SlideLayout, SlideParagraph, SlideRun, SlideShape, TextAnchor, TextFrame,
+        };
+        let anchor = |n: u32| Block::Paragraph(vec![Inline::Anchor(format!("slide-{n}"))]);
+        let px = 9525.0; // EMU per px
+        let shape = SlideShape {
+            frame: Frame {
+                x: 10.0 * px,
+                y: 20.0 * px,
+                width: 300.0 * px,
+                height: 40.0 * px,
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            geometry: Geometry::RoundRect { radius: 0.25 },
+            preset: "roundRect".to_string(),
+            fill: Some(Fill::Solid(Rgba { rgb: [0x7C, 0x3A, 0xED], alpha: 0.5 })),
+            line: None,
+            shadow: None,
+            content: ShapeContent::Text(TextFrame {
+                insets: [0.0; 4],
+                anchor: TextAnchor::Middle,
+                wrap: true,
+                paragraphs: vec![SlideParagraph {
+                    align: SlideAlign::Center,
+                    margin_left: 0.0,
+                    indent: 0.0,
+                    line_spacing: None,
+                    space_before: None,
+                    space_after: None,
+                    bullet: None,
+                    runs: vec![SlideRun {
+                        text: "Hi".to_string(),
+                        size: 1800.0,
+                        font: Some("Calibri".to_string()),
+                        bold: true,
+                        italic: false,
+                        underline: false,
+                        strike: false,
+                        color: Rgba { rgb: [255, 255, 255], alpha: 1.0 },
+                        letter_spacing: 0.0,
+                        baseline: 0.0,
+                        all_caps: false,
+                    }],
+                    end_size: 1800.0,
+                }],
+            }),
+        };
+        let layout = |n: u32, shapes: Vec<SlideShape>| SlideLayout {
+            anchor: format!("slide-{n}"),
+            width: 1280.0 * px,
+            height: 720.0 * px,
+            background: None,
+            shapes,
+        };
+        // Slide 2 has no text at all - with a layout it still gets its page.
+        let doc = Document {
+            blocks: vec![anchor(1), Block::Paragraph(vec![Inline::plain("Hi")]), anchor(2)],
+            slides: vec![layout(1, vec![shape]), layout(2, Vec::new())],
+            ..Default::default()
+        };
+        let out = crate::ir::document_to_ir(&doc, "pptx");
+        assert!(out.json.contains("{\"pageIndex\":1,\"blocks\":[],\"slide\":{\"width\":1280,\"height\":720,\"shapes\":[]}}"), "{}", out.json);
+        assert!(
+            out.json.contains(
+                "\"slide\":{\"width\":1280,\"height\":720,\"shapes\":[{\"x\":10,\"y\":20,\"width\":300,\"height\":40,\
+                 \"geometry\":{\"type\":\"roundRect\",\"radius\":0.25},\
+                 \"fill\":{\"type\":\"solid\",\"color\":\"#7C3AED80\"},\
+                 \"text\":{\"insets\":[0,0,0,0],\"anchor\":\"middle\",\"paragraphs\":[{\"endSize\":24,\"align\":\"center\",\
+                 \"runs\":[{\"text\":\"Hi\",\"fontSize\":24,\"color\":\"#FFFFFF\",\"fontFamily\":\"Calibri\",\"bold\":true}]}]}}]}"
+            ),
+            "{}",
             out.json
         );
     }

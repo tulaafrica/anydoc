@@ -80,7 +80,7 @@ apply from: '../nitrogen/generated/android/RNAnydoc+autolinking.gradle'
 // toolchain) drops the same files in libs/ and this task self-skips.
 // The Rust core's release, NOT the package version: a JS/Gradle-only release (0.4.2) reuses the
 // 0.4.1 binaries. Keep in step with "anydocCore" in package.json (the iOS download reads that).
-def anydocLibsVersion = "0.4.1"
+def anydocLibsVersion = "0.5.0"
 def anydocLibsUrl = project.hasProperty("anydocLibsUrl")
   ? project.property("anydocLibsUrl").toString()
   : "https://github.com/tulaafrica/anydoc/releases/download/rn-v${anydocLibsVersion}/anydoc-android-libs-${anydocLibsVersion}.zip"

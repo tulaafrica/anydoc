@@ -54,6 +54,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document, ConvertError> {
         assets,
         fonts: Vec::new(),
         comments: Vec::new(),
+        slides: Vec::new(),
     })
 }
 

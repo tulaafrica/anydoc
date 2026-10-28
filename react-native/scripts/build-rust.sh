@@ -13,6 +13,13 @@ BIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$BIN/aarch64-linux-android24-clang"
 export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$BIN/armv7a-linux-androideabi24-clang"
 export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$BIN/x86_64-linux-android24-clang"
+# The core compiles C too (mimalloc), so the cc crate needs the NDK compiler.
+export CC_aarch64_linux_android="$BIN/aarch64-linux-android24-clang"
+export CC_armv7_linux_androideabi="$BIN/armv7a-linux-androideabi24-clang"
+export CC_x86_64_linux_android="$BIN/x86_64-linux-android24-clang"
+export AR_aarch64_linux_android="$BIN/llvm-ar"
+export AR_armv7_linux_androideabi="$BIN/llvm-ar"
+export AR_x86_64_linux_android="$BIN/llvm-ar"
 
 for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
   case $target in

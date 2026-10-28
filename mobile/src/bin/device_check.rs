@@ -30,6 +30,11 @@ fn main() {
         if std::env::var("ANYDOC_DUMP").is_ok() {
             println!("{json}");
         }
+        // ANYDOC_BLOB=<dir>: write the asset blob as <dir>/<name>.blob, so a
+        // host-side renderer can resolve the JSON's asset offsets.
+        if let Ok(dir) = std::env::var("ANYDOC_BLOB") {
+            std::fs::write(format!("{dir}/{name}.blob"), &buffer[4 + json_len..]).unwrap();
+        }
         unsafe { anydoc_mobile::anydoc_tula_free(out, out_len) };
     }
 }

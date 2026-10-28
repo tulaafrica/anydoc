@@ -11,15 +11,23 @@ mod chart;
 mod inline;
 mod link;
 mod list;
+mod slide;
 mod style;
 mod table;
 
 pub use asset::{Asset, AssetId};
 pub use block::Block;
 pub use chart::{Chart, ChartKind, ChartSeries};
-pub use inline::{CommentMarkKind, Inline, checkbox_text, inlines_are_empty, inlines_to_plain_text};
+pub use inline::{
+    CommentMarkKind, Inline, checkbox_text, inlines_are_empty, inlines_to_plain_text,
+};
 pub use link::{AnchorId, ImageSource, LinkTarget};
 pub use list::{List, ListItem, MarkerKind};
+pub use slide::{
+    Crop, Fill, Frame, Geometry, Line, LineDash, PathCmd, Rgba, Shadow, ShapeContent, SlideAlign,
+    SlideBullet, SlideLayout, SlideParagraph, SlideRun, SlideShape, SlideTable, SlideTableCell,
+    SlideTableRow, Spacing, TextAnchor, TextFrame,
+};
 pub use style::{Align, Caps, FontId, Highlight, ParaProps, Style, VertAlign, parse_hex_color};
 pub use table::{BorderEdge, Cell, CellSlot, Table, TableBorders, TableKind};
 
@@ -43,6 +51,9 @@ pub struct Document {
     /// TULA FORK: review comments, in the order the document defines them.
     /// Anchoring travels in the text as [`Inline::CommentMark`] markers.
     pub comments: Vec<DocComment>,
+    /// TULA FORK: each slide's fixed layout, for presentations whose
+    /// frontend reads geometry (pptx). Empty for every other format.
+    pub slides: Vec<SlideLayout>,
 }
 
 /// TULA FORK: one review comment made on the document.

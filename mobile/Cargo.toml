@@ -13,6 +13,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # before conversion (platform viewers render them better), so linking
 # pdf-inspector would be pure dead weight in every app binary.
 anydoc = { path = "..", default-features = false }
+mimalloc = { version = "0.1", default-features = false }
 
 [profile.release]
 opt-level = "z"

@@ -7,6 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The podspec's minimum. Without it the C in the core (mimalloc) is compiled
+# for the installed SDK's iOS version and may call APIs older phones lack.
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-15.1}"
+
 for target in aarch64-apple-ios aarch64-apple-ios-sim; do
   echo "==> $target"
   (cd .. && cargo build --release -p anydoc-mobile --target $target)
