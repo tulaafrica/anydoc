@@ -18,6 +18,15 @@
 
 mod ir;
 
+// Conversion is allocation-bound: the XML tree allocates per element and per
+// attribute, and on low-end Android the system allocator takes a lock on every
+// call (measured on a Unisoc SC9832E: a third of all conversion time in
+// je_malloc/je_free and their mutexes). mimalloc's thread-local free lists
+// make those calls cheap. Only this library's Rust allocations use it; the
+// host app's allocator is untouched.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn esc(s: &str) -> String {
